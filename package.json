@@ -1,0 +1,20 @@
+{
+  "name": "bot-provisionamento-ixc",
+  "version": "0.1.0",
+  "description": "Bot Telegram para provisionamento de ONUs no IXC Provedor.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "check": "node --check src/index.js && node --check src/ixcClient.js && node --check src/flow.js && node --check src/config.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "dotenv": "^16.4.7",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}

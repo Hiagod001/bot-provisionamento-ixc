@@ -1,0 +1,905 @@
+import {
+  confirmKeyboard,
+  locationKeyboard,
+  oldFiberKeyboard,
+  portsKeyboard,
+  rowsKeyboard,
+  serviceKeyboard,
+  swapOldFiberKeyboard,
+  titularityKeyboard,
+} from './keyboards.js';
+import {
+  buildProvisionSuccessMessage,
+  buildSummary,
+  buildTitularitySuccessMessage,
+  formatAuthorizedOnu,
+  formatContract,
+  formatLogin,
+  formatOnu,
+  serviceLabel,
+  short,
+} from './format.js';
+
+const sessions = new Map();
+
+const newSession = () => ({
+  step: 'service',
+  serviceType: null,
+  serialSuffix: null,
+  matches: [],
+  onu: null,
+  oldFiber: null,
+  pendingAfterOldFiberRemoval: [],
+  skipLoginAfterContractChoice: false,
+  contractActivationWarning: null,
+  macCleanupWarning: null,
+  olt: null,
+  box: null,
+  dropPort: null,
+  freePorts: [],
+  client: null,
+  contract: null,
+  login: null,
+  profile: null,
+});
+
+const sessionKey = (ctx) => String(ctx.chat?.id);
+
+const getSession = (ctx) => {
+  const key = sessionKey(ctx);
+  if (!sessions.has(key)) sessions.set(key, newSession());
+  return sessions.get(key);
+};
+
+const resetSession = (ctx) => {
+  sessions.set(sessionKey(ctx), newSession());
+  return sessions.get(sessionKey(ctx));
+};
+
+const mustChooseMessage = 'Use os botoes da mensagem anterior ou envie /cancelar para recomecar.';
+
+const ensureAllowed = (ctx, allowedIds) => {
+  if (!allowedIds.length) return true;
+  return allowedIds.includes(String(ctx.from?.id));
+};
+
+const askSerial = async (ctx, state) => {
+  state.step = 'serial';
+  await ctx.reply(
+    `Servico selecionado: ${serviceLabel(state.serviceType)}\n\nEnvie os 7 ultimos digitos do serial da ONU.`
+  );
+};
+
+const continueWithPendingOnus = async (ctx, state, ixc, onus) => {
+  if (!onus.length) {
+    state.step = 'serial';
+    await ctx.reply(
+      'Nao encontrei essa ONU aguardando autorizacao ainda. Reconecte a ONU no novo endereco, aguarde ela aparecer na OLT e envie os 7 ultimos caracteres do serial novamente.'
+    );
+    return;
+  }
+
+  if (onus.length === 1) {
+    state.onu = onus[0];
+    await ctx.reply(formatOnu(state.onu));
+    if (state.onu?.id_olt) await loadOlt(state, ixc);
+    if (state.serviceType === 'troca') {
+      state.step = 'client';
+      await ctx.reply('Troca de equipamento: agora envie o ID do cliente para eu buscar o contrato e o equipamento antigo.');
+      return;
+    }
+    await askBoxLocation(ctx, state);
+    return;
+  }
+
+  state.matches = onus;
+  state.step = 'onu_choose';
+  await ctx.reply(
+    'Encontrei mais de uma ONU aguardando autorizacao. Escolha a correta:',
+    rowsKeyboard('onu', onus, (onu) =>
+      `${onu.olt_nome || onu.id_olt || '-'} - ${onu.mac || onu.Chassi || 'sem serial'}`
+    )
+  );
+};
+
+const askOldFiberRemoval = async (ctx, state) => {
+  state.step = 'oldfiber_confirm';
+  await ctx.reply(
+    `${formatAuthorizedOnu(state.oldFiber)}\n\nComo o servico e mudanca de endereco, remova esse cadastro antigo antes de seguir com o novo provisionamento.`,
+    oldFiberKeyboard()
+  );
+};
+
+const askSwapOldFiberRemoval = async (ctx, state) => {
+  state.step = 'swap_oldfiber_confirm';
+  await ctx.reply(
+    `${formatAuthorizedOnu(state.oldFiber)}\n\nNa troca de equipamento, vou remover esse equipamento antigo e reaproveitar a mesma caixa e porta para a ONU nova.`,
+    swapOldFiberKeyboard()
+  );
+};
+
+const pickSingleOrAsk = async (ctx, state, rows, field, step, prefix, message, labelFn) => {
+  if (rows.length === 1) {
+    state[field] = rows[0];
+    state.step = step;
+    await ctx.reply(message(rows[0]));
+    return true;
+  }
+
+  state.matches = rows;
+  state.step = `${prefix}_choose`;
+  await ctx.reply('Encontrei mais de uma opcao. Escolha a correta:', rowsKeyboard(prefix, rows, labelFn));
+  return false;
+};
+
+const askContractChoice = async (ctx, state, contracts, client) => {
+  if (contracts.length === 1) {
+    state.contract = contracts[0];
+    state.step = 'login_lookup';
+    await ctx.reply(
+      `Cliente: ${short(client.razao)}\n\nContrato encontrado:\n${formatContract(contracts[0], client)}\n\nVou buscar o login PPPoE...`
+    );
+    return true;
+  }
+
+  state.matches = contracts;
+  state.step = 'contract_choose';
+
+  const list = contracts
+    .slice(0, 10)
+    .map((contract, index) => `${index + 1}. ${formatContract(contract, client)}`)
+    .join('\n\n');
+
+  await ctx.reply(
+    `Cliente: ${short(client.razao)}\n\nContratos encontrados:\n\n${list}\n\nEscolha o contrato correto:`,
+    rowsKeyboard('contract', contracts, (contract, index) =>
+      `${index + 1} - ${contract.id} - ${contract.contrato || contract.status || 'contrato'}`
+    )
+  );
+  return false;
+};
+
+const askLoginForContract = async (ctx, state, ixc) => {
+  const logins = await ixc.findPppoeLoginsByContract(state.contract.id);
+  if (!logins.length) {
+    state.step = 'login_id';
+    await ctx.reply('Nao encontrei login PPPoE nesse contrato. Envie o ID do login manualmente.');
+    return;
+  }
+
+  await pickSingleOrAsk(
+    ctx,
+    state,
+    logins,
+    'login',
+    state.serviceType === 'titularidade' ? 'titularity_lookup' : 'profile_lookup',
+    'login',
+    (login) =>
+      state.serviceType === 'titularidade'
+        ? `Login encontrado: ${formatLogin(login)}\n\nVou preparar a transferencia de titularidade...`
+        : `Login encontrado: ${formatLogin(login)}\n\nVou listar os scripts da OLT...`,
+    (login) => `${login.id} - ${login.login}`
+  );
+
+  if (state.login) {
+    if (state.serviceType === 'titularidade') {
+      await askTitularityTransfer(ctx, state);
+      return;
+    }
+    await clearLoginMacWithWarning(ctx, state, ixc);
+    await askProfile(ctx, state, ixc);
+  }
+};
+
+const handleSwapAfterContractChoice = async (ctx, state, ixc) => {
+  const oldFibers = await ixc.findFiberClientsByContract(state.contract.id);
+  if (!oldFibers.length) {
+    state.step = 'swap_oldfiber_missing';
+    await ctx.reply(
+      'Nao encontrei equipamento antigo no cadastro de fibra para esse contrato. Confira se escolheu o contrato correto ou envie /cancelar.'
+    );
+    return true;
+  }
+
+  if (oldFibers.length === 1) {
+    state.oldFiber = oldFibers[0];
+    await askSwapOldFiberRemoval(ctx, state);
+    return true;
+  }
+
+  state.matches = oldFibers;
+  state.step = 'swap_oldonu_choose';
+  await ctx.reply(
+    'Encontrei mais de um equipamento antigo nesse contrato. Escolha qual sera substituido:',
+    rowsKeyboard('swapoldonu', oldFibers, (onu) =>
+      `${onu.id} - ${onu.mac || 'sem serial'} - caixa ${onu.id_caixa_ftth || '-'} porta ${onu.porta_ftth || '-'}`
+    )
+  );
+  return true;
+};
+
+const activateContractWithWarning = async (ctx, state, ixc) => {
+  if (!['instalacao', 'titularidade'].includes(state.serviceType)) return;
+
+  const response = await ixc.activateContract(state.contract.id);
+  if (response?.type === 'error') {
+    state.contractActivationWarning = response.message;
+    await ctx.reply(`Aviso: nao consegui ativar o contrato automaticamente no IXC: ${response.message}`);
+    return;
+  }
+
+  await ctx.reply('Contrato ativado no IXC.');
+};
+
+const clearLoginMacWithWarning = async (ctx, state, ixc) => {
+  if (state.serviceType !== 'troca' || !state.login?.id) return;
+
+  const response = await ixc.clearLoginMac(state.login.id);
+  if (response?.type === 'error') {
+    state.macCleanupWarning = response.message;
+    await ctx.reply(`Aviso: nao consegui limpar o MAC automaticamente no IXC: ${response.message}`);
+    return;
+  }
+
+  await ctx.reply('MAC do login limpo no IXC.');
+};
+
+const clearOldTitularityLoginMacWithWarning = async (ctx, state, ixc) => {
+  const oldLoginId = state.oldFiber?.id_login;
+  if (!oldLoginId || oldLoginId === '0') {
+    state.macCleanupWarning = 'Cadastro de fibra antigo sem ID de login vinculado.';
+    await ctx.reply('Aviso: nao encontrei o ID do login antigo para limpar o MAC automaticamente.');
+    return;
+  }
+
+  if (String(oldLoginId) === String(state.login?.id)) return;
+
+  const response = await ixc.clearLoginMac(oldLoginId);
+  if (response?.type === 'error') {
+    state.macCleanupWarning = response.message;
+    await ctx.reply(`Aviso: nao consegui limpar o MAC do login antigo automaticamente no IXC: ${response.message}`);
+    return;
+  }
+
+  await ctx.reply(`MAC do login antigo limpo no IXC. Login antigo: ${oldLoginId}`);
+};
+
+const askTitularityTransfer = async (ctx, state) => {
+  state.step = 'titularity_confirm';
+  await ctx.reply(
+    `${formatAuthorizedOnu(state.oldFiber)}\n\nVou transferir esse cadastro de fibra para o novo contrato/login selecionado.`,
+    titularityKeyboard()
+  );
+};
+
+const finishTitularityTransfer = async (ctx, state, ixc) => {
+  await activateContractWithWarning(ctx, state, ixc);
+  await clearOldTitularityLoginMacWithWarning(ctx, state, ixc);
+
+  const patch = {
+    id_contrato: short(state.contract?.id, ''),
+    id_login: short(state.login?.id, ''),
+    nome: short(state.client?.razao || state.login?.login || state.oldFiber?.nome, ''),
+    endereco_padrao_cliente: 'S',
+  };
+
+  const response = await ixc.transferFiberClient(state.oldFiber.id, patch);
+  const updatedFiber = (await ixc.read('radpop_radio_cliente_fibra', state.oldFiber.id)) || {
+    ...state.oldFiber,
+    ...patch,
+  };
+
+  await ctx.reply(buildTitularitySuccessMessage(state, updatedFiber));
+  if (state.contractActivationWarning) {
+    await ctx.reply(`Aviso: verifique manualmente a ativacao do contrato. Motivo: ${state.contractActivationWarning}`);
+  }
+  if (response?.type === 'error') {
+    await ctx.reply(`Aviso do IXC: ${response.message}`);
+  }
+  if (state.macCleanupWarning) {
+    await ctx.reply(`Aviso: verifique manualmente a limpeza do MAC do login antigo. Motivo: ${state.macCleanupWarning}`);
+  }
+  resetSession(ctx);
+};
+
+const enrichCityNames = async (ixc, records) => {
+  const list = Array.isArray(records) ? records : [records];
+  const cityIds = [...new Set(list.map((record) => record?.cidade).filter(Boolean))];
+  const names = new Map();
+
+  await Promise.all(
+    cityIds.map(async (cityId) => {
+      names.set(String(cityId), await ixc.findCityName(cityId));
+    })
+  );
+
+  for (const record of list) {
+    if (record?.cidade) record.cidade_nome = names.get(String(record.cidade)) || '';
+  }
+};
+
+const selectByCallback = async (ctx, prefix, field, nextStep, nextMessage) => {
+  const state = getSession(ctx);
+  const index = Number(ctx.callbackQuery.data.replace(`${prefix}:`, ''));
+  const selected = state.matches[index];
+  if (!selected) {
+    await ctx.answerCbQuery('Opcao expirada. Envie /provisionar.');
+    return null;
+  }
+
+  state[field] = selected;
+  state.matches = [];
+  state.step = nextStep;
+  await ctx.answerCbQuery('Selecionado');
+  await ctx.reply(nextMessage(selected));
+  return selected;
+};
+
+const buildProvisionPayload = (state) => ({
+  pendingOnuId: state.onu?.id,
+  clienteFibra: {
+    radpop_estrutura: 'N',
+    id_transmissor: short(state.olt?.id || state.onu?.id_olt, ''),
+    id_caixa_ftth: short(state.box?.id, ''),
+    porta_ftth: short(state.dropPort, ''),
+    id_contrato: short(state.contract?.id, ''),
+    id_login: short(state.login?.id, ''),
+    nome: short(state.client?.razao || state.login?.login || state.onu?.mac, 'ONU provisionada pelo bot'),
+    mac: short(state.onu?.mac || state.onu?.Chassi, ''),
+    id_perfil: short(state.profile?.id, ''),
+    ponid: short(state.onu?.ponid || state.onu?.ponno, ''),
+    slotno: short(state.onu?.slotno, ''),
+    ponno: short(state.onu?.ponno, ''),
+    service_port: '0',
+    id_chamado_radpop: '0',
+    login_onu_cliente: 'admin',
+    senha_onu_cliente: 'admin',
+    porta_telnet_onu_cliente: '23',
+    porta_web_onu_cliente: '80',
+    tipo_autenticacao: 'MAC',
+    endereco_padrao_cliente: 'S',
+  },
+});
+
+const loadOlt = async (state, ixc) => {
+  if (state.olt) return;
+  if (!state.onu?.id_olt) return;
+
+  try {
+    state.olt = await ixc.read('radpop_radio', state.onu.id_olt);
+  } catch {
+    state.olt = {
+      id: state.onu.id_olt,
+      descricao: state.onu.olt_nome,
+      olt_nome: state.onu.olt_nome,
+    };
+  }
+
+  if (!state.olt) {
+    state.olt = {
+      id: state.onu.id_olt,
+      descricao: state.onu.olt_nome,
+      olt_nome: state.onu.olt_nome,
+    };
+  }
+};
+
+const askBoxLocation = async (ctx, state) => {
+  state.step = 'box_location';
+  await ctx.reply(
+    'Agora envie sua localizacao atual pelo botao abaixo para eu buscar caixas em ate 300 metros.',
+    locationKeyboard()
+  );
+};
+
+const askFreePortChoice = async (ctx, state, ixc) => {
+  await ctx.reply('Consultando portas livres da caixa...');
+  const freePorts = await ixc.findFreeBoxPorts(state.box);
+  state.freePorts = freePorts;
+
+  if (!freePorts.length) {
+    state.step = 'box_location';
+    await ctx.reply(
+      `A caixa ${short(state.box?.descricao)} nao tem portas livres cadastradas pela capacidade atual (${short(state.box?.capacidade)}). Envie outra localizacao ou escolha outra caixa.`
+    );
+    return;
+  }
+
+  state.step = 'port_choose';
+  await ctx.reply(
+    `Caixa escolhida: ${short(state.box.descricao)}\nCapacidade: ${short(state.box.capacidade)}\n\nEscolha uma porta livre:`,
+    portsKeyboard(freePorts)
+  );
+};
+
+export const registerFlow = (bot, ixc, config) => {
+  bot.use(async (ctx, next) => {
+    if (!ensureAllowed(ctx, config.allowedTelegramIds)) {
+      await ctx.reply('Seu Telegram nao esta autorizado a usar este bot.');
+      return;
+    }
+    return next();
+  });
+
+  bot.start(async (ctx) => {
+    resetSession(ctx);
+    await ctx.reply(
+      'Provisionamento IXC\n\nEscolha o tipo de servico:',
+      serviceKeyboard()
+    );
+  });
+
+  bot.command('provisionar', async (ctx) => {
+    resetSession(ctx);
+    await ctx.reply('Escolha o tipo de servico:', serviceKeyboard());
+  });
+
+  bot.command('cancelar', async (ctx) => {
+    resetSession(ctx);
+    await ctx.reply('Fluxo cancelado. Para iniciar de novo, envie /provisionar.');
+  });
+
+  bot.command('status', async (ctx) => {
+    const state = getSession(ctx);
+    await ctx.reply(`Etapa atual: ${state.step}`);
+  });
+
+  bot.action(/^service:/, async (ctx) => {
+    const state = resetSession(ctx);
+    state.serviceType = ctx.callbackQuery.data.replace('service:', '');
+    await ctx.answerCbQuery('Servico selecionado');
+    await askSerial(ctx, state);
+  });
+
+  bot.action(/^onu:/, async (ctx) => {
+    const state = getSession(ctx);
+    const onu = await selectByCallback(ctx, 'onu', 'onu', 'box_location', (selected) =>
+      `ONU selecionada:\n${formatOnu(selected)}`
+    );
+    if (onu?.id_olt) await loadOlt(state, ixc);
+    if (onu) {
+      if (state.serviceType === 'troca') {
+        state.step = 'client';
+        await ctx.reply('Troca de equipamento: agora envie o ID do cliente para eu buscar o contrato e o equipamento antigo.');
+      } else {
+        await askBoxLocation(ctx, state);
+      }
+    }
+  });
+
+  bot.action(/^oldonu:/, async (ctx) => {
+    const state = getSession(ctx);
+    const oldFiber = await selectByCallback(ctx, 'oldonu', 'oldFiber', 'oldfiber_confirm', (selected) =>
+      formatAuthorizedOnu(selected)
+    );
+    if (!oldFiber) return;
+    await askOldFiberRemoval(ctx, state);
+  });
+
+  bot.action(/^swapoldonu:/, async (ctx) => {
+    const state = getSession(ctx);
+    const oldFiber = await selectByCallback(ctx, 'swapoldonu', 'oldFiber', 'swap_oldfiber_confirm', (selected) =>
+      formatAuthorizedOnu(selected)
+    );
+    if (!oldFiber) return;
+    await askSwapOldFiberRemoval(ctx, state);
+  });
+
+  bot.action(/^titularoldonu:/, async (ctx) => {
+    const state = getSession(ctx);
+    const oldFiber = await selectByCallback(ctx, 'titularoldonu', 'oldFiber', 'client', (selected) =>
+      `${formatAuthorizedOnu(selected)}\n\nAgora envie o ID do novo cliente no IXC.`
+    );
+    if (!oldFiber) return;
+  });
+
+  bot.action(/^oldfiber:delete$/, async (ctx) => {
+    const state = getSession(ctx);
+    if (state.step !== 'oldfiber_confirm' || !state.oldFiber?.id) {
+      await ctx.answerCbQuery('Etapa expirada');
+      await ctx.reply('Etapa expirada. Envie /provisionar para recomecar.');
+      return;
+    }
+
+    await ctx.answerCbQuery('Removendo cadastro antigo');
+    await ctx.reply('Removendo cadastro antigo da ONU no IXC...');
+    await ixc.removeAuthorizedOnu(state.oldFiber.id);
+    await ctx.reply('Cadastro antigo removido. Vou procurar a ONU na fila de autorizacao novamente...');
+
+    const pending =
+      state.pendingAfterOldFiberRemoval.length > 0
+        ? state.pendingAfterOldFiberRemoval
+        : await ixc.findPendingOnusBySerialSuffix(state.serialSuffix);
+
+    state.oldFiber = null;
+    state.pendingAfterOldFiberRemoval = [];
+    await continueWithPendingOnus(ctx, state, ixc, pending);
+  });
+
+  bot.action(/^swapoldfiber:delete$/, async (ctx) => {
+    const state = getSession(ctx);
+    if (state.step !== 'swap_oldfiber_confirm' || !state.oldFiber?.id) {
+      await ctx.answerCbQuery('Etapa expirada');
+      await ctx.reply('Etapa expirada. Envie /provisionar para recomecar.');
+      return;
+    }
+
+    const oldFiber = state.oldFiber;
+    if (!oldFiber.id_caixa_ftth || !oldFiber.porta_ftth || oldFiber.porta_ftth === '0') {
+      await ctx.answerCbQuery('Dados antigos incompletos');
+      await ctx.reply(
+        'Esse equipamento antigo nao tem caixa/porta validas no cadastro de fibra. Nao consigo reaproveitar o local com seguranca. Corrija no IXC ou envie /cancelar.'
+      );
+      return;
+    }
+
+    await ctx.answerCbQuery('Removendo equipamento antigo');
+    await ctx.reply('Removendo equipamento antigo do cadastro de fibra...');
+    await ixc.removeAuthorizedOnu(oldFiber.id);
+
+    const box = oldFiber.id_caixa_ftth ? await ixc.read('rad_caixa_ftth', oldFiber.id_caixa_ftth) : null;
+    state.box = box || {
+      id: oldFiber.id_caixa_ftth,
+      descricao: `Caixa ${oldFiber.id_caixa_ftth}`,
+      capacidade: '',
+    };
+    state.dropPort = String(oldFiber.porta_ftth || '');
+    state.oldFiber = null;
+
+    await ctx.reply(
+      `Equipamento antigo removido.\nVou reaproveitar:\nCaixa: ${short(state.box?.descricao)} (ID ${short(state.box?.id)})\nPorta: ${short(state.dropPort)}`
+    );
+
+    await askLoginForContract(ctx, state, ixc);
+  });
+
+  bot.action(/^titularity:transfer$/, async (ctx) => {
+    const state = getSession(ctx);
+    if (state.step !== 'titularity_confirm' || !state.oldFiber?.id || !state.contract?.id || !state.login?.id) {
+      await ctx.answerCbQuery('Etapa expirada');
+      await ctx.reply('Etapa expirada. Envie /provisionar para recomecar.');
+      return;
+    }
+
+    await ctx.answerCbQuery('Transferindo titularidade');
+    await ctx.reply('Transferindo cadastro de fibra para o novo titular...');
+    await finishTitularityTransfer(ctx, state, ixc);
+  });
+
+  bot.action(/^box:/, async (ctx) => {
+    const state = getSession(ctx);
+    const box = await selectByCallback(ctx, 'box', 'box', 'port_lookup', (selected) =>
+      `Caixa escolhida: ${short(selected.descricao)} (${short(selected.distanceMeters)}m)`
+    );
+    if (!box) return;
+    await askFreePortChoice(ctx, state, ixc);
+  });
+
+  bot.action(/^port:/, async (ctx) => {
+    const state = getSession(ctx);
+    const port = Number.parseInt(ctx.callbackQuery.data.replace('port:', ''), 10);
+
+    if (state.step !== 'port_choose' || !state.freePorts.includes(port)) {
+      await ctx.answerCbQuery('Porta indisponivel ou etapa expirada');
+      await ctx.reply('Essa porta nao esta disponivel nesta etapa. Envie /provisionar para recomecar.');
+      return;
+    }
+
+    state.dropPort = String(port);
+    state.step = 'client';
+    await ctx.answerCbQuery(`Porta ${port} selecionada`);
+    await ctx.reply(`Porta selecionada: ${port}\n\nAgora envie o ID do cliente no IXC.`);
+  });
+
+  bot.action(/^contract:/, async (ctx) => {
+    const state = getSession(ctx);
+    const contract = await selectByCallback(ctx, 'contract', 'contract', 'login_lookup', (selected) =>
+      `Contrato selecionado:\n${formatContract(selected, state.client)}\n\nVou buscar o login PPPoE vinculado a ele...`
+    );
+    if (!contract) return;
+
+    if (state.serviceType === 'troca') {
+      await handleSwapAfterContractChoice(ctx, state, ixc);
+      return;
+    }
+
+    await askLoginForContract(ctx, state, ixc);
+  });
+
+  bot.action(/^login:/, async (ctx) => {
+    const login = await selectByCallback(ctx, 'login', 'login', 'profile_lookup', (selected) =>
+      getSession(ctx).serviceType === 'titularidade'
+        ? `Login escolhido: ${formatLogin(selected)}\n\nVou preparar a transferencia de titularidade...`
+        : `Login escolhido: ${formatLogin(selected)}\n\nVou listar os scripts da OLT...`
+    );
+    if (!login) return;
+    const state = getSession(ctx);
+    if (state.serviceType === 'titularidade') {
+      await askTitularityTransfer(ctx, state);
+      return;
+    }
+    await clearLoginMacWithWarning(ctx, state, ixc);
+    await askProfile(ctx, state, ixc);
+  });
+
+  bot.action(/^profile:/, async (ctx) => {
+    const profile = await selectByCallback(ctx, 'profile', 'profile', 'confirm', (selected) =>
+      `Script escolhido: ${short(selected.nome)}`
+    );
+    if (!profile) return;
+    const state = getSession(ctx);
+    await ctx.reply(buildSummary(state), confirmKeyboard());
+  });
+
+  bot.action(/^confirm:/, async (ctx) => {
+    const state = getSession(ctx);
+    const accepted = ctx.callbackQuery.data === 'confirm:yes';
+    await ctx.answerCbQuery(accepted ? 'Confirmado' : 'Cancelado');
+
+    if (!accepted) {
+      resetSession(ctx);
+      await ctx.reply('Provisionamento cancelado. Envie /provisionar para recomecar.');
+      return;
+    }
+
+    const payload = buildProvisionPayload(state);
+    if (config.dryRun) {
+      resetSession(ctx);
+      await ctx.reply(
+        `DRY_RUN ativo: nada foi gravado no IXC.\n\nPayload que seria enviado:\n${JSON.stringify(payload.clienteFibra, null, 2)}`
+      );
+      return;
+    }
+
+    await activateContractWithWarning(ctx, state, ixc);
+    const result = await ixc.provisionOnu(payload);
+    await ctx.reply(buildProvisionSuccessMessage(state, result.provisionedOnu));
+    if (result.deleteResponse?.type === 'error') {
+      await ctx.reply(
+        `Aviso: a ONU foi provisionada, mas o IXC retornou erro ao remover da fila de autorizacao: ${result.deleteResponse.message}`
+      );
+    }
+    if (state.contractActivationWarning) {
+      await ctx.reply(`Aviso: verifique manualmente a ativacao do contrato. Motivo: ${state.contractActivationWarning}`);
+    }
+    if (state.macCleanupWarning) {
+      await ctx.reply(`Aviso: verifique manualmente a limpeza do MAC. Motivo: ${state.macCleanupWarning}`);
+    }
+    resetSession(ctx);
+  });
+
+  bot.on('location', async (ctx) => {
+    const state = getSession(ctx);
+    if (state.step !== 'box_location') {
+      await ctx.reply('Localizacao recebida, mas nao estou na etapa de escolher caixa. Envie /provisionar para iniciar.');
+      return;
+    }
+
+    await ctx.reply('Buscando caixas ativas em ate 300 metros...', {
+      reply_markup: { remove_keyboard: true },
+    });
+
+    const boxes = await ixc.findBoxesNearLocation(ctx.message.location, {
+      radiusMeters: 300,
+      limit: 10,
+    });
+
+    if (!boxes.length) {
+      await ctx.reply(
+        'Nao encontrei caixas ativas em ate 300 metros dessa localizacao. Envie uma nova localizacao mais proxima da CTO.'
+      );
+      return;
+    }
+
+    state.matches = boxes;
+    state.step = 'box_choose';
+    await ctx.reply(
+      'Escolha a caixa correta:',
+      rowsKeyboard('box', boxes, (box) =>
+        `${box.distanceMeters}m - ${box.id} - ${box.descricao}`
+      )
+    );
+  });
+
+  bot.on('text', async (ctx) => {
+    const state = getSession(ctx);
+    const text = ctx.message.text.trim();
+
+    if (state.step === 'service') {
+      await ctx.reply(mustChooseMessage);
+      return;
+    }
+
+    if (state.step === 'serial') {
+      const serial = text.replace(/\s+/g, '').toUpperCase();
+      if (!/^[A-Z0-9]{7}$/.test(serial)) {
+        await ctx.reply('Envie exatamente os 7 ultimos caracteres do serial, usando apenas letras e numeros.');
+        return;
+      }
+
+      await ctx.reply(
+        state.serviceType === 'titularidade'
+          ? 'Buscando ONU ja provisionada no IXC...'
+          : 'Atualizando a lista de ONUs no IXC (Consultar todas) e buscando o serial...'
+      );
+      state.serialSuffix = serial;
+
+      if (state.serviceType === 'titularidade') {
+        const authorizedOnus = await ixc.findAuthorizedOnusBySerialSuffix(serial);
+        if (!authorizedOnus.length) {
+          await ctx.reply('Nao encontrei uma ONU ja provisionada com esse serial. Confira o serial ou envie /cancelar.');
+          return;
+        }
+
+        if (authorizedOnus.length === 1) {
+          state.oldFiber = authorizedOnus[0];
+          state.step = 'client';
+          await ctx.reply(`${formatAuthorizedOnu(state.oldFiber)}\n\nAgora envie o ID do novo cliente no IXC.`);
+          return;
+        }
+
+        state.matches = authorizedOnus;
+        state.step = 'titularoldonu_choose';
+        await ctx.reply(
+          'Encontrei mais de um cadastro de fibra com esse serial. Escolha qual sera transferido:',
+          rowsKeyboard('titularoldonu', authorizedOnus, (onu) =>
+            `${onu.id} - ${onu.mac || 'sem serial'} - contrato ${onu.id_contrato || '-'}`
+          )
+        );
+        return;
+      }
+
+      const onus = await ixc.findPendingOnusBySerialSuffix(serial);
+
+      if (state.serviceType === 'mudanca') {
+        const authorizedOnus = await ixc.findAuthorizedOnusBySerialSuffix(serial);
+        if (authorizedOnus.length) {
+          state.pendingAfterOldFiberRemoval = onus;
+
+          if (authorizedOnus.length === 1) {
+            state.oldFiber = authorizedOnus[0];
+            await askOldFiberRemoval(ctx, state);
+            return;
+          }
+
+          state.matches = authorizedOnus;
+          state.step = 'oldonu_choose';
+          await ctx.reply(
+            'Encontrei mais de um cadastro antigo para esse serial. Escolha qual deve ser removido:',
+            rowsKeyboard('oldonu', authorizedOnus, (onu) =>
+              `${onu.id} - ${onu.mac || 'sem serial'} - contrato ${onu.id_contrato || '-'}`
+            )
+          );
+          return;
+        }
+      }
+
+      if (!onus.length) {
+        await ctx.reply('Nao encontrei ONU pendente com esse final de serial. Confira e envie novamente.');
+        return;
+      }
+
+      await continueWithPendingOnus(ctx, state, ixc, onus);
+      return;
+    }
+
+    if (state.step === 'box_location') {
+      await ctx.reply('Nessa etapa, envie a localizacao atual usando o botao do Telegram.');
+      return;
+    }
+
+    if (state.step === 'box') {
+      await ctx.reply('Buscando caixa de atendimento...');
+      const oltId = state.olt?.id || state.onu?.id_olt;
+      const boxes = await ixc.findBoxes(text, oltId);
+      if (!boxes.length) {
+        await ctx.reply('Nao encontrei essa caixa para a OLT da ONU. Envie o ID ou parte do nome da caixa.');
+        return;
+      }
+
+      await pickSingleOrAsk(
+        ctx,
+        state,
+        boxes,
+        'box',
+        'drop_port',
+        'box',
+        (box) => `Caixa escolhida: ${short(box.descricao)}\n\nEnvie a porta onde o drop esta ligado.`,
+        (box) => `${box.id} - ${box.descricao}`
+      );
+      return;
+    }
+
+    if (state.step === 'port_choose') {
+      await ctx.reply('Escolha a porta livre pelo menu de botoes.');
+      return;
+    }
+
+    if (state.step === 'client') {
+      if (!/^\d+$/.test(text)) {
+        await ctx.reply('Envie apenas o ID numerico do cliente.');
+        return;
+      }
+
+      await ctx.reply('Buscando cliente e contratos...');
+      const client = await ixc.findClient(text);
+      if (!client) {
+        await ctx.reply('Cliente nao encontrado. Confira o ID e envie novamente.');
+        return;
+      }
+
+      state.client = client;
+      const contracts = await ixc.findContractsByClient(text);
+      if (!contracts.length) {
+        await ctx.reply(`Cliente encontrado: ${short(client.razao)}\nMas nao encontrei contratos para esse cliente.`);
+        return;
+      }
+
+      await enrichCityNames(ixc, [client, ...contracts]);
+      await askContractChoice(ctx, state, contracts, client);
+
+      if (state.contract) {
+        if (state.serviceType === 'troca') {
+          await handleSwapAfterContractChoice(ctx, state, ixc);
+          return;
+        }
+        await askLoginForContract(ctx, state, ixc);
+      }
+      return;
+    }
+
+    if (state.step === 'login_id') {
+      if (!/^\d+$/.test(text)) {
+        await ctx.reply('Envie apenas o ID numerico do login PPPoE.');
+        return;
+      }
+      const login = await ixc.read('radusuarios', text);
+      if (!login) {
+        await ctx.reply('Login nao encontrado. Confira o ID e envie novamente.');
+        return;
+      }
+      state.login = login;
+      if (state.serviceType === 'titularidade') {
+        await ctx.reply(`Login escolhido: ${formatLogin(login)}\n\nVou preparar a transferencia de titularidade...`);
+        await askTitularityTransfer(ctx, state);
+        return;
+      }
+      await ctx.reply(`Login escolhido: ${formatLogin(login)}\n\nVou listar os scripts da OLT...`);
+      await clearLoginMacWithWarning(ctx, state, ixc);
+      await askProfile(ctx, state, ixc);
+      return;
+    }
+
+    await ctx.reply(mustChooseMessage);
+  });
+};
+
+const askProfile = async (ctx, state, ixc) => {
+  await loadOlt(state, ixc);
+
+  const profiles = await ixc.findProfilesByOlt(state.olt, state.onu);
+  if (!profiles.length) {
+    state.step = 'profile_manual';
+    await ctx.reply(
+      `Nao encontrei scripts para a OLT ${short(state.olt?.descricao)} (${short(state.olt?.fabricante_modelo)}). Cadastre os perfis no IXC ou envie /cancelar.`
+    );
+    return;
+  }
+
+  const defaultProfileId = state.olt?.perfil_fibra_padrao;
+  const ordered = [
+    ...profiles.filter((profile) => String(profile.id) === String(defaultProfileId)),
+    ...profiles.filter((profile) => String(profile.id) !== String(defaultProfileId)),
+  ];
+
+  state.matches = ordered;
+  state.step = 'profile_choose';
+  const oltName = state.olt?.descricao || state.olt?.olt_nome || state.onu?.olt_nome;
+  const manufacturer = state.olt?.fabricante_modelo || state.onu?.modelo || state.onu?.mac;
+  await ctx.reply(
+    `OLT: ${short(oltName)}\nFabricante/modelo: ${short(manufacturer)}\nScripts encontrados: ${ordered.length}\n\nEscolha o script de provisionamento:`,
+    rowsKeyboard('profile', ordered, (profile) =>
+      `${profile.id} - ${profile.nome}${String(profile.id) === String(defaultProfileId) ? ' (padrao)' : ''}`
+    )
+  );
+};
