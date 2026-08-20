@@ -30,76 +30,65 @@ export const contractAddress = (contract, client = null) => {
 
 export const formatOnu = (onu) =>
   [
-    'ONU encontrada aguardando autorizacao:',
-    `Serial/MAC: ${short(onu.mac || onu.Chassi)}`,
-    `Modelo: ${short(onu.modelo || onu.onu_tipo)}`,
+    'ONU encontrada:',
+    `Serial: ${short(onu.mac || onu.Chassi)}`,
     `OLT: ${short(onu.olt_nome || onu.descricao || onu.id_olt)}`,
-    `Slot/PON: ${short(onu.slotno)}/${short(onu.ponno)}`,
+    `PON: ${short(onu.slotno)}/${short(onu.ponno)}`,
+    `Modelo: ${short(onu.modelo || onu.onu_tipo)}`,
   ].join('\n');
 
 export const formatContract = (contract, client = null) =>
   [
-    `Contrato ${short(contract.id)} - ${short(contract.contrato)}`,
-    `Status: ${short(contract.status)} / Internet: ${short(contract.status_internet)}`,
-    contractAddress(contract, client),
+    `Contrato ${short(contract.id)} | ${short(contract.status)}`,
+    `Plano: ${short(contract.contrato)}`,
+    `Endereco: ${contractAddress(contract, client)}`,
   ].join('\n');
 
 export const formatLogin = (login) =>
-  `Login ${short(login.id)} - ${short(login.login)} (${short(login.autenticacao)})`;
+  `${short(login.login)} (ID ${short(login.id)})`;
 
 export const formatAuthorizedOnu = (onu) =>
   [
-    'Cadastro antigo encontrado para esta ONU:',
-    `ID cadastro fibra: ${short(onu.id)}`,
-    `Serial/MAC: ${short(onu.mac)}`,
-    `OLT antiga: ${short(onu.id_transmissor)}`,
-    `Caixa antiga: ${short(onu.id_caixa_ftth)}`,
-    `Porta antiga: ${short(onu.porta_ftth)}`,
-    `Contrato antigo: ${short(onu.id_contrato)}`,
-    `Login antigo: ${short(onu.id_login)}`,
-    `VLAN antiga: ${short(onu.vlan || onu.vlan_pppoe)}`,
+    'ONU ja cadastrada:',
+    `Cadastro: ${short(onu.id)} | Serial: ${short(onu.mac)}`,
+    `Caixa/porta: ${short(onu.id_caixa_ftth)}/${short(onu.porta_ftth)}`,
+    `Contrato/login: ${short(onu.id_contrato)}/${short(onu.id_login)}`,
+    `VLAN: ${short(onu.vlan || onu.vlan_pppoe)}`,
   ].join('\n');
 
 export const buildSummary = (state) =>
   [
-    'Resumo do provisionamento:',
+    'Confirmar dados:',
     `Servico: ${serviceLabel(state.serviceType)}`,
-    `ONU: ${short(state.onu?.mac || state.onu?.Chassi)} | OLT ${short(state.olt?.descricao || state.olt?.olt_nome || state.onu?.olt_nome || state.onu?.id_olt)}`,
-    `Caixa: ${short(state.box?.descricao)} (ID ${short(state.box?.id)})`,
-    `Porta drop: ${short(state.dropPort)}`,
-    `Cliente: ${short(state.client?.razao)} (ID ${short(state.client?.id)})`,
-    `Contrato: ${short(state.contract?.id)} - ${short(state.contract?.contrato)}`,
-    `PPPoE: ${short(state.login?.login)} (ID ${short(state.login?.id)})`,
-    `Script/perfil: ${short(state.profile?.nome)} (ID ${short(state.profile?.id)})`,
+    `ONU: ${short(state.onu?.mac || state.onu?.Chassi)}`,
+    `OLT: ${short(state.olt?.descricao || state.olt?.olt_nome || state.onu?.olt_nome || state.onu?.id_olt)}`,
+    `Caixa/porta: ${short(state.box?.descricao)} / ${short(state.dropPort)}`,
+    `Cliente: ${short(state.client?.razao)} | Contrato ${short(state.contract?.id)}`,
+    `PPPoE: ${short(state.login?.login)}`,
+    `Script: ${short(state.profile?.nome)}`,
   ].join('\n');
 
 export const buildProvisionSuccessMessage = (state, provisionedOnu) =>
   [
-    'ONU provisionada no IXC com sucesso.',
+    'Provisionado com sucesso.',
     '',
-    'Dados para configurar a ONT:',
     `VLAN: ${short(provisionedOnu?.vlan || provisionedOnu?.vlan_pppoe || state.login?.vlan)}`,
     `PPPoE: ${short(state.login?.login)}`,
-    `Senha PPPoE: ${short(state.login?.senha)}`,
+    `Senha: ${short(state.login?.senha)}`,
     '',
-    `OLT: ${short(state.olt?.descricao || state.olt?.olt_nome || state.onu?.olt_nome || state.onu?.id_olt)}`,
-    `Caixa: ${short(state.box?.descricao)} (ID ${short(state.box?.id)})`,
-    `Porta: ${short(state.dropPort)}`,
-    `ONU/MAC: ${short(provisionedOnu?.mac || state.onu?.mac || state.onu?.Chassi)}`,
+    `Caixa/porta: ${short(state.box?.descricao)} / ${short(state.dropPort)}`,
+    `ONU: ${short(provisionedOnu?.mac || state.onu?.mac || state.onu?.Chassi)}`,
   ].join('\n');
 
 export const buildTitularitySuccessMessage = (state, fiber) =>
   [
-    'Troca de titularidade concluida no IXC.',
+    'Titularidade transferida.',
     '',
-    'Dados atuais do acesso:',
     `VLAN: ${short(fiber?.vlan || fiber?.vlan_pppoe || state.login?.vlan)}`,
     `PPPoE: ${short(state.login?.login)}`,
-    `Senha PPPoE: ${short(state.login?.senha)}`,
+    `Senha: ${short(state.login?.senha)}`,
     '',
-    `Novo cliente: ${short(state.client?.razao)} (ID ${short(state.client?.id)})`,
-    `Contrato: ${short(state.contract?.id)} - ${short(state.contract?.contrato)}`,
-    `Caixa: ${short(fiber?.id_caixa_ftth || state.oldFiber?.id_caixa_ftth)}`,
-    `Porta: ${short(fiber?.porta_ftth || state.oldFiber?.porta_ftth)}`,
-    `ONU/MAC: ${short(fiber?.mac || state.oldFiber?.mac)}`,
+    `Cliente: ${short(state.client?.razao)} | Contrato ${short(state.contract?.id)}`,
+    `Caixa/porta: ${short(fiber?.id_caixa_ftth || state.oldFiber?.id_caixa_ftth)}/${short(fiber?.porta_ftth || state.oldFiber?.porta_ftth)}`,
+    `ONU: ${short(fiber?.mac || state.oldFiber?.mac)}`,
   ].join('\n');

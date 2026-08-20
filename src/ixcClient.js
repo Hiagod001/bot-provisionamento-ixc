@@ -51,22 +51,41 @@ const normalizePendingOnu = (row) => {
   };
 };
 
-const inferManufacturer = (...values) => {
+const inferManufacturerAliases = (...values) => {
   const name = values.filter(Boolean).join(' ').toLowerCase();
-  if (name.includes('huawei')) return 'HW';
-  if (name.includes('fiberhome')) return 'FH';
-  if (name.includes('zte')) return 'ZTE';
-  if (name.includes('nokia')) return 'NK';
-  if (name.includes('parks')) return 'PK';
-  if (name.includes('furukawa')) return 'FKG';
-  if (name.includes('intelbras')) return 'INB';
-  if (name.includes('tp link') || name.includes('tplink')) return 'TPLINK';
-  if (name.includes('hwtc')) return 'HW';
-  if (name.includes('fhtt')) return 'FH';
-  if (name.includes('zteg')) return 'ZTE';
-  if (name.includes('alcl')) return 'NK';
-  if (name.includes('tplg')) return 'TPLINK';
-  return '';
+  if (name.includes('huawei') || name.includes('hwtc')) return ['HW'];
+  if (name.includes('fiberhome') || name.includes('fhtt')) return ['FBT', 'FH', 'FB6001'];
+  if (name.includes('zte') || name.includes('zteg')) return ['ZTE'];
+  if (name.includes('nokia') || name.includes('alcl')) return ['NK'];
+  if (name.includes('parks')) return ['PK'];
+  if (name.includes('furukawa')) return ['FKG'];
+  if (name.includes('intelbras')) return ['INTELBRASG16', 'INB'];
+  if (name.includes('tp link') || name.includes('tplink') || name.includes('tplg')) return ['TPLINK'];
+  return [];
+};
+
+const manufacturerKeywords = (aliases) => {
+  const values = new Set();
+  for (const alias of aliases) {
+    if (alias === 'HW') ['HUAWEI', ' H.', 'H.'].forEach((value) => values.add(value));
+    if (['FBT', 'FH', 'FB6001'].includes(alias)) {
+      ['FIBERHOME', ' F.', 'F.', 'FBT', 'FB6001'].forEach((value) => values.add(value));
+    }
+    if (alias === 'ZTE') values.add('ZTE');
+    if (['INTELBRASG16', 'INB'].includes(alias)) values.add('INTELBRAS');
+  }
+  return [...values];
+};
+
+const profileMatchesManufacturer = (profile, aliases) => {
+  if (!aliases.length) return true;
+
+  const fabricante = String(profile.fabricante_modelo || '').trim().toUpperCase();
+  if (fabricante && aliases.includes(fabricante)) return true;
+  if (fabricante) return false;
+
+  const name = ` ${String(profile.nome || '').trim().toUpperCase()}`;
+  return manufacturerKeywords(aliases).some((keyword) => name.includes(keyword));
 };
 
 const extractCreatedId = (response) => {
@@ -449,31 +468,19 @@ export class IxcClient {
   }
 
   async findProfilesByOlt(olt, onu = null) {
-    const manufacturer =
-      olt?.fabricante_modelo ||
-      inferManufacturer(olt?.olt_nome, olt?.descricao, onu?.modelo, onu?.mac);
-
-    if (manufacturer) {
-      const rows = await this.list('radpop_radio_cliente_fibra_perfil', {
-        qtype: 'radpop_radio_cliente_fibra_perfil.fabricante_modelo',
-        query: manufacturer,
-        oper: '=',
-        rp: '50',
-        sortname: 'radpop_radio_cliente_fibra_perfil.nome',
-        sortorder: 'asc',
-      });
-
-      if (rows.length) return rows;
-    }
-
-    return this.list('radpop_radio_cliente_fibra_perfil', {
-      qtype: 'radpop_radio_cliente_fibra_perfil.fabricante_modelo',
-      query: '',
-      oper: '!=',
-      rp: '50',
+    const aliases = [
+      String(olt?.fabricante_modelo || '').trim().toUpperCase(),
+      ...inferManufacturerAliases(olt?.olt_nome, olt?.descricao, onu?.modelo, onu?.mac),
+    ].filter(Boolean);
+    const uniqueAliases = [...new Set(aliases)];
+    const rows = await this.list('radpop_radio_cliente_fibra_perfil', {
+      rp: '500',
       sortname: 'radpop_radio_cliente_fibra_perfil.nome',
       sortorder: 'asc',
     });
+
+    const compatible = rows.filter((profile) => profileMatchesManufacturer(profile, uniqueAliases));
+    return compatible.length ? compatible : rows;
   }
 
   async findProvisionedOnu({ createResponse, mac, loginId, contractId }) {

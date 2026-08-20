@@ -62,7 +62,7 @@ Base oficial: `https://SEU_DOMINIO/webservice/v1/{tabela}`.
 | Cliente | `cliente` | Conferir nome do cliente |
 | Contratos | `cliente_contrato` | Listar contratos do cliente |
 | Login PPPoE | `radusuarios` | Buscar login vinculado ao contrato |
-| Scripts/perfis | `radpop_radio_cliente_fibra_perfil` | Listar scripts conforme fabricante/modelo da OLT |
+| Scripts/perfis | `radpop_radio_cliente_fibra_perfil` | Listar scripts conforme fabricante/modelo da OLT, incluindo aliases como `HW`, `FBT`, `FH` e scripts antigos sem fabricante quando o nome combina |
 | Cadastro/provisionamento da ONU | `radpop_radio_cliente_fibra` | Criar a ONU com OLT, caixa, porta, contrato, login e perfil |
 | Ativacao de contrato | `cliente_contrato_ativar_cliente` | Tentar ativar contrato em instalacao e titularidade somente quando o contrato ainda nao estiver ativo |
 | Limpeza de MAC | `radusuarios_25452` | Limpar MAC do login na troca de equipamento e do login antigo na troca de titularidade |

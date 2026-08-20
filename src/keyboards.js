@@ -15,7 +15,7 @@ export const titularityKeyboard = () =>
   ]);
 
 export const rowsKeyboard = (prefix, rows, labelFn) => {
-  const buttons = rows.slice(0, 10).map((row, index) => [
+  const buttons = rows.slice(0, 30).map((row, index) => [
     Markup.button.callback(labelFn(row, index).slice(0, 60), `${prefix}:${index}`),
   ]);
   return Markup.inlineKeyboard(buttons);

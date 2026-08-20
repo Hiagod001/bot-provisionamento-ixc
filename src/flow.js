@@ -65,16 +65,14 @@ const ensureAllowed = (ctx, allowedIds) => {
 
 const askSerial = async (ctx, state) => {
   state.step = 'serial';
-  await ctx.reply(
-    `Servico selecionado: ${serviceLabel(state.serviceType)}\n\nEnvie os 7 ultimos digitos do serial da ONU.`
-  );
+  await ctx.reply(`${serviceLabel(state.serviceType)}\n\nEnvie os 7 ultimos caracteres do serial.`);
 };
 
 const continueWithPendingOnus = async (ctx, state, ixc, onus) => {
   if (!onus.length) {
     state.step = 'serial';
     await ctx.reply(
-      'Nao encontrei essa ONU aguardando autorizacao ainda. Reconecte a ONU no novo endereco, aguarde ela aparecer na OLT e envie os 7 ultimos caracteres do serial novamente.'
+      'ONU nao apareceu na fila. Reconecte a ONU, aguarde alguns segundos e envie o serial de novo.'
     );
     return;
   }
@@ -85,7 +83,7 @@ const continueWithPendingOnus = async (ctx, state, ixc, onus) => {
     if (state.onu?.id_olt) await loadOlt(state, ixc);
     if (state.serviceType === 'troca') {
       state.step = 'client';
-      await ctx.reply('Troca de equipamento: agora envie o ID do cliente para eu buscar o contrato e o equipamento antigo.');
+      await ctx.reply('Envie o ID do cliente.');
       return;
     }
     await askBoxLocation(ctx, state);
@@ -95,7 +93,7 @@ const continueWithPendingOnus = async (ctx, state, ixc, onus) => {
   state.matches = onus;
   state.step = 'onu_choose';
   await ctx.reply(
-    'Encontrei mais de uma ONU aguardando autorizacao. Escolha a correta:',
+    'Escolha a ONU:',
     rowsKeyboard('onu', onus, (onu) =>
       `${onu.olt_nome || onu.id_olt || '-'} - ${onu.mac || onu.Chassi || 'sem serial'}`
     )
@@ -105,7 +103,7 @@ const continueWithPendingOnus = async (ctx, state, ixc, onus) => {
 const askOldFiberRemoval = async (ctx, state) => {
   state.step = 'oldfiber_confirm';
   await ctx.reply(
-    `${formatAuthorizedOnu(state.oldFiber)}\n\nComo o servico e mudanca de endereco, remova esse cadastro antigo antes de seguir com o novo provisionamento.`,
+    `${formatAuthorizedOnu(state.oldFiber)}\n\nPara mudar endereco, remova o cadastro antigo primeiro.`,
     oldFiberKeyboard()
   );
 };
@@ -113,7 +111,7 @@ const askOldFiberRemoval = async (ctx, state) => {
 const askSwapOldFiberRemoval = async (ctx, state) => {
   state.step = 'swap_oldfiber_confirm';
   await ctx.reply(
-    `${formatAuthorizedOnu(state.oldFiber)}\n\nNa troca de equipamento, vou remover esse equipamento antigo e reaproveitar a mesma caixa e porta para a ONU nova.`,
+    `${formatAuthorizedOnu(state.oldFiber)}\n\nVou remover a ONU antiga e usar a mesma caixa/porta.`,
     swapOldFiberKeyboard()
   );
 };
@@ -128,7 +126,7 @@ const pickSingleOrAsk = async (ctx, state, rows, field, step, prefix, message, l
 
   state.matches = rows;
   state.step = `${prefix}_choose`;
-  await ctx.reply('Encontrei mais de uma opcao. Escolha a correta:', rowsKeyboard(prefix, rows, labelFn));
+  await ctx.reply('Escolha uma opcao:', rowsKeyboard(prefix, rows, labelFn));
   return false;
 };
 
@@ -137,7 +135,7 @@ const askContractChoice = async (ctx, state, contracts, client) => {
     state.contract = contracts[0];
     state.step = 'login_lookup';
     await ctx.reply(
-      `Cliente: ${short(client.razao)}\n\nContrato encontrado:\n${formatContract(contracts[0], client)}\n\nVou buscar o login PPPoE...`
+      `Cliente: ${short(client.razao)}\n\n${formatContract(contracts[0], client)}\n\nBuscando PPPoE...`
     );
     return true;
   }
@@ -151,7 +149,7 @@ const askContractChoice = async (ctx, state, contracts, client) => {
     .join('\n\n');
 
   await ctx.reply(
-    `Cliente: ${short(client.razao)}\n\nContratos encontrados:\n\n${list}\n\nEscolha o contrato correto:`,
+    `Cliente: ${short(client.razao)}\n\nContratos:\n\n${list}`,
     rowsKeyboard('contract', contracts, (contract, index) =>
       `${index + 1} - ${contract.id} - ${contract.contrato || contract.status || 'contrato'}`
     )
@@ -163,7 +161,7 @@ const askLoginForContract = async (ctx, state, ixc) => {
   const logins = await ixc.findPppoeLoginsByContract(state.contract.id);
   if (!logins.length) {
     state.step = 'login_id';
-    await ctx.reply('Nao encontrei login PPPoE nesse contrato. Envie o ID do login manualmente.');
+    await ctx.reply('Nao achei PPPoE. Envie o ID do login.');
     return;
   }
 
@@ -176,8 +174,8 @@ const askLoginForContract = async (ctx, state, ixc) => {
     'login',
     (login) =>
       state.serviceType === 'titularidade'
-        ? `Login encontrado: ${formatLogin(login)}\n\nVou preparar a transferencia de titularidade...`
-        : `Login encontrado: ${formatLogin(login)}\n\nVou listar os scripts da OLT...`,
+        ? `PPPoE: ${formatLogin(login)}\n\nPreparando transferencia...`
+        : `PPPoE: ${formatLogin(login)}\n\nBuscando scripts...`,
     (login) => `${login.id} - ${login.login}`
   );
 
@@ -196,7 +194,7 @@ const handleSwapAfterContractChoice = async (ctx, state, ixc) => {
   if (!oldFibers.length) {
     state.step = 'swap_oldfiber_missing';
     await ctx.reply(
-      'Nao encontrei equipamento antigo no cadastro de fibra para esse contrato. Confira se escolheu o contrato correto ou envie /cancelar.'
+      'Nao achei ONU antiga nesse contrato. Confira o contrato ou envie /cancelar.'
     );
     return true;
   }
@@ -210,7 +208,7 @@ const handleSwapAfterContractChoice = async (ctx, state, ixc) => {
   state.matches = oldFibers;
   state.step = 'swap_oldonu_choose';
   await ctx.reply(
-    'Encontrei mais de um equipamento antigo nesse contrato. Escolha qual sera substituido:',
+    'Escolha a ONU antiga:',
     rowsKeyboard('swapoldonu', oldFibers, (onu) =>
       `${onu.id} - ${onu.mac || 'sem serial'} - caixa ${onu.id_caixa_ftth || '-'} porta ${onu.porta_ftth || '-'}`
     )
@@ -249,18 +247,18 @@ const activateContractWithWarning = async (ctx, state, ixc) => {
   await refreshSelectedContract(state, ixc);
 
   if (isContractActive(state.contract)) {
-    await ctx.reply(`Contrato ${short(state.contract?.id)} ja esta ativo no IXC. Vou seguir sem ativar novamente.`);
+    await ctx.reply(`Contrato ${short(state.contract?.id)} ja esta ativo.`);
     return;
   }
 
   const response = await ixc.activateContract(state.contract.id);
   if (response?.type === 'error') {
     state.contractActivationWarning = response.message;
-    await ctx.reply(`Aviso: nao consegui ativar o contrato automaticamente no IXC: ${response.message}`);
+    await ctx.reply(`Aviso: nao ativei o contrato. ${response.message}`);
     return;
   }
 
-  await ctx.reply('Contrato ativado no IXC.');
+  await ctx.reply('Contrato ativado.');
 };
 
 const clearLoginMacWithWarning = async (ctx, state, ixc) => {
@@ -269,18 +267,18 @@ const clearLoginMacWithWarning = async (ctx, state, ixc) => {
   const response = await ixc.clearLoginMac(state.login.id);
   if (response?.type === 'error') {
     state.macCleanupWarning = response.message;
-    await ctx.reply(`Aviso: nao consegui limpar o MAC automaticamente no IXC: ${response.message}`);
+    await ctx.reply(`Aviso: nao limpei o MAC. ${response.message}`);
     return;
   }
 
-  await ctx.reply('MAC do login limpo no IXC.');
+  await ctx.reply('MAC limpo.');
 };
 
 const clearOldTitularityLoginMacWithWarning = async (ctx, state, ixc) => {
   const oldLoginId = state.oldFiber?.id_login;
   if (!oldLoginId || oldLoginId === '0') {
     state.macCleanupWarning = 'Cadastro de fibra antigo sem ID de login vinculado.';
-    await ctx.reply('Aviso: nao encontrei o ID do login antigo para limpar o MAC automaticamente.');
+    await ctx.reply('Aviso: login antigo sem ID para limpar MAC.');
     return;
   }
 
@@ -289,17 +287,17 @@ const clearOldTitularityLoginMacWithWarning = async (ctx, state, ixc) => {
   const response = await ixc.clearLoginMac(oldLoginId);
   if (response?.type === 'error') {
     state.macCleanupWarning = response.message;
-    await ctx.reply(`Aviso: nao consegui limpar o MAC do login antigo automaticamente no IXC: ${response.message}`);
+    await ctx.reply(`Aviso: nao limpei o MAC antigo. ${response.message}`);
     return;
   }
 
-  await ctx.reply(`MAC do login antigo limpo no IXC. Login antigo: ${oldLoginId}`);
+  await ctx.reply(`MAC antigo limpo. Login ${oldLoginId}`);
 };
 
 const askTitularityTransfer = async (ctx, state) => {
   state.step = 'titularity_confirm';
   await ctx.reply(
-    `${formatAuthorizedOnu(state.oldFiber)}\n\nVou transferir esse cadastro de fibra para o novo contrato/login selecionado.`,
+    `${formatAuthorizedOnu(state.oldFiber)}\n\nTransferir para o novo cliente?`,
     titularityKeyboard()
   );
 };
@@ -419,27 +417,27 @@ const loadOlt = async (state, ixc) => {
 const askBoxLocation = async (ctx, state) => {
   state.step = 'box_location';
   await ctx.reply(
-    'Agora envie sua localizacao atual pelo botao abaixo para eu buscar caixas em ate 300 metros.',
+    'Envie sua localizacao para buscar caixas proximas.',
     locationKeyboard()
   );
 };
 
 const askFreePortChoice = async (ctx, state, ixc) => {
-  await ctx.reply('Consultando portas livres da caixa...');
+  await ctx.reply('Buscando portas livres...');
   const freePorts = await ixc.findFreeBoxPorts(state.box);
   state.freePorts = freePorts;
 
   if (!freePorts.length) {
     state.step = 'box_location';
     await ctx.reply(
-      `A caixa ${short(state.box?.descricao)} nao tem portas livres cadastradas pela capacidade atual (${short(state.box?.capacidade)}). Envie outra localizacao ou escolha outra caixa.`
+      `Sem porta livre na caixa ${short(state.box?.descricao)}. Envie outra localizacao.`
     );
     return;
   }
 
   state.step = 'port_choose';
   await ctx.reply(
-    `Caixa escolhida: ${short(state.box.descricao)}\nCapacidade: ${short(state.box.capacidade)}\n\nEscolha uma porta livre:`,
+    `Caixa: ${short(state.box.descricao)}\nEscolha uma porta livre:`,
     portsKeyboard(freePorts)
   );
 };
@@ -447,7 +445,7 @@ const askFreePortChoice = async (ctx, state, ixc) => {
 export const registerFlow = (bot, ixc, config) => {
   bot.use(async (ctx, next) => {
     if (!ensureAllowed(ctx, config.allowedTelegramIds)) {
-      await ctx.reply('Seu Telegram nao esta autorizado a usar este bot.');
+      await ctx.reply('Telegram nao autorizado.');
       return;
     }
     return next();
@@ -456,19 +454,19 @@ export const registerFlow = (bot, ixc, config) => {
   bot.start(async (ctx) => {
     resetSession(ctx);
     await ctx.reply(
-      'Provisionamento IXC\n\nEscolha o tipo de servico:',
+      'Provisionamento IXC\n\nEscolha o servico:',
       serviceKeyboard()
     );
   });
 
   bot.command('provisionar', async (ctx) => {
     resetSession(ctx);
-    await ctx.reply('Escolha o tipo de servico:', serviceKeyboard());
+    await ctx.reply('Escolha o servico:', serviceKeyboard());
   });
 
   bot.command('cancelar', async (ctx) => {
     resetSession(ctx);
-    await ctx.reply('Fluxo cancelado. Para iniciar de novo, envie /provisionar.');
+    await ctx.reply('Cancelado. Envie /provisionar para iniciar.');
   });
 
   bot.command('status', async (ctx) => {
@@ -492,7 +490,7 @@ export const registerFlow = (bot, ixc, config) => {
     if (onu) {
       if (state.serviceType === 'troca') {
         state.step = 'client';
-        await ctx.reply('Troca de equipamento: agora envie o ID do cliente para eu buscar o contrato e o equipamento antigo.');
+        await ctx.reply('Envie o ID do cliente.');
       } else {
         await askBoxLocation(ctx, state);
       }
@@ -520,7 +518,7 @@ export const registerFlow = (bot, ixc, config) => {
   bot.action(/^titularoldonu:/, async (ctx) => {
     const state = getSession(ctx);
     const oldFiber = await selectByCallback(ctx, 'titularoldonu', 'oldFiber', 'client', (selected) =>
-      `${formatAuthorizedOnu(selected)}\n\nAgora envie o ID do novo cliente no IXC.`
+      `${formatAuthorizedOnu(selected)}\n\nEnvie o ID do novo cliente.`
     );
     if (!oldFiber) return;
   });
@@ -529,14 +527,14 @@ export const registerFlow = (bot, ixc, config) => {
     const state = getSession(ctx);
     if (state.step !== 'oldfiber_confirm' || !state.oldFiber?.id) {
       await ctx.answerCbQuery('Etapa expirada');
-      await ctx.reply('Etapa expirada. Envie /provisionar para recomecar.');
+      await ctx.reply('Etapa expirada. Envie /provisionar.');
       return;
     }
 
     await ctx.answerCbQuery('Removendo cadastro antigo');
-    await ctx.reply('Removendo cadastro antigo da ONU no IXC...');
+    await ctx.reply('Removendo cadastro antigo...');
     await ixc.removeAuthorizedOnu(state.oldFiber.id);
-    await ctx.reply('Cadastro antigo removido. Vou procurar a ONU na fila de autorizacao novamente...');
+    await ctx.reply('Removido. Buscando a ONU na fila...');
 
     const pending =
       state.pendingAfterOldFiberRemoval.length > 0
@@ -552,7 +550,7 @@ export const registerFlow = (bot, ixc, config) => {
     const state = getSession(ctx);
     if (state.step !== 'swap_oldfiber_confirm' || !state.oldFiber?.id) {
       await ctx.answerCbQuery('Etapa expirada');
-      await ctx.reply('Etapa expirada. Envie /provisionar para recomecar.');
+      await ctx.reply('Etapa expirada. Envie /provisionar.');
       return;
     }
 
@@ -560,13 +558,13 @@ export const registerFlow = (bot, ixc, config) => {
     if (!oldFiber.id_caixa_ftth || !oldFiber.porta_ftth || oldFiber.porta_ftth === '0') {
       await ctx.answerCbQuery('Dados antigos incompletos');
       await ctx.reply(
-        'Esse equipamento antigo nao tem caixa/porta validas no cadastro de fibra. Nao consigo reaproveitar o local com seguranca. Corrija no IXC ou envie /cancelar.'
+        'ONU antiga sem caixa/porta. Corrija no IXC ou envie /cancelar.'
       );
       return;
     }
 
     await ctx.answerCbQuery('Removendo equipamento antigo');
-    await ctx.reply('Removendo equipamento antigo do cadastro de fibra...');
+    await ctx.reply('Removendo ONU antiga...');
     await ixc.removeAuthorizedOnu(oldFiber.id);
 
     const box = oldFiber.id_caixa_ftth ? await ixc.read('rad_caixa_ftth', oldFiber.id_caixa_ftth) : null;
@@ -579,7 +577,7 @@ export const registerFlow = (bot, ixc, config) => {
     state.oldFiber = null;
 
     await ctx.reply(
-      `Equipamento antigo removido.\nVou reaproveitar:\nCaixa: ${short(state.box?.descricao)} (ID ${short(state.box?.id)})\nPorta: ${short(state.dropPort)}`
+      `ONU antiga removida.\nCaixa/porta: ${short(state.box?.descricao)} / ${short(state.dropPort)}`
     );
 
     await askLoginForContract(ctx, state, ixc);
@@ -589,12 +587,12 @@ export const registerFlow = (bot, ixc, config) => {
     const state = getSession(ctx);
     if (state.step !== 'titularity_confirm' || !state.oldFiber?.id || !state.contract?.id || !state.login?.id) {
       await ctx.answerCbQuery('Etapa expirada');
-      await ctx.reply('Etapa expirada. Envie /provisionar para recomecar.');
+      await ctx.reply('Etapa expirada. Envie /provisionar.');
       return;
     }
 
     await ctx.answerCbQuery('Transferindo titularidade');
-    await ctx.reply('Transferindo cadastro de fibra para o novo titular...');
+    await ctx.reply('Transferindo titularidade...');
     await finishTitularityTransfer(ctx, state, ixc);
   });
 
@@ -613,20 +611,20 @@ export const registerFlow = (bot, ixc, config) => {
 
     if (state.step !== 'port_choose' || !state.freePorts.includes(port)) {
       await ctx.answerCbQuery('Porta indisponivel ou etapa expirada');
-      await ctx.reply('Essa porta nao esta disponivel nesta etapa. Envie /provisionar para recomecar.');
+      await ctx.reply('Porta indisponivel. Envie /provisionar.');
       return;
     }
 
     state.dropPort = String(port);
     state.step = 'client';
     await ctx.answerCbQuery(`Porta ${port} selecionada`);
-    await ctx.reply(`Porta selecionada: ${port}\n\nAgora envie o ID do cliente no IXC.`);
+    await ctx.reply(`Porta ${port}\n\nEnvie o ID do cliente.`);
   });
 
   bot.action(/^contract:/, async (ctx) => {
     const state = getSession(ctx);
     const contract = await selectByCallback(ctx, 'contract', 'contract', 'login_lookup', (selected) =>
-      `Contrato selecionado:\n${formatContract(selected, state.client)}\n\nVou buscar o login PPPoE vinculado a ele...`
+      `${formatContract(selected, state.client)}\n\nBuscando PPPoE...`
     );
     if (!contract) return;
 
@@ -670,7 +668,7 @@ export const registerFlow = (bot, ixc, config) => {
 
     if (!accepted) {
       resetSession(ctx);
-      await ctx.reply('Provisionamento cancelado. Envie /provisionar para recomecar.');
+      await ctx.reply('Cancelado. Envie /provisionar para iniciar.');
       return;
     }
 
@@ -688,14 +686,14 @@ export const registerFlow = (bot, ixc, config) => {
     await ctx.reply(buildProvisionSuccessMessage(state, result.provisionedOnu));
     if (result.deleteResponse?.type === 'error') {
       await ctx.reply(
-        `Aviso: a ONU foi provisionada, mas o IXC retornou erro ao remover da fila de autorizacao: ${result.deleteResponse.message}`
+        `Aviso: provisionou, mas nao removi da fila. ${result.deleteResponse.message}`
       );
     }
     if (state.contractActivationWarning) {
-      await ctx.reply(`Aviso: verifique manualmente a ativacao do contrato. Motivo: ${state.contractActivationWarning}`);
+      await ctx.reply(`Aviso: confira a ativacao. ${state.contractActivationWarning}`);
     }
     if (state.macCleanupWarning) {
-      await ctx.reply(`Aviso: verifique manualmente a limpeza do MAC. Motivo: ${state.macCleanupWarning}`);
+      await ctx.reply(`Aviso: confira a limpeza do MAC. ${state.macCleanupWarning}`);
     }
     resetSession(ctx);
   });
@@ -703,11 +701,11 @@ export const registerFlow = (bot, ixc, config) => {
   bot.on('location', async (ctx) => {
     const state = getSession(ctx);
     if (state.step !== 'box_location') {
-      await ctx.reply('Localizacao recebida, mas nao estou na etapa de escolher caixa. Envie /provisionar para iniciar.');
+      await ctx.reply('Nao estou escolhendo caixa agora. Envie /provisionar.');
       return;
     }
 
-    await ctx.reply('Buscando caixas ativas em ate 300 metros...', {
+    await ctx.reply('Buscando caixas proximas...', {
       reply_markup: { remove_keyboard: true },
     });
 
@@ -718,7 +716,7 @@ export const registerFlow = (bot, ixc, config) => {
 
     if (!boxes.length) {
       await ctx.reply(
-        'Nao encontrei caixas ativas em ate 300 metros dessa localizacao. Envie uma nova localizacao mais proxima da CTO.'
+        'Nao achei caixa em ate 300m. Envie uma localizacao mais perto da CTO.'
       );
       return;
     }
@@ -726,7 +724,7 @@ export const registerFlow = (bot, ixc, config) => {
     state.matches = boxes;
     state.step = 'box_choose';
     await ctx.reply(
-      'Escolha a caixa correta:',
+      'Escolha a caixa:',
       rowsKeyboard('box', boxes, (box) =>
         `${box.distanceMeters}m - ${box.id} - ${box.descricao}`
       )
@@ -745,35 +743,35 @@ export const registerFlow = (bot, ixc, config) => {
     if (state.step === 'serial') {
       const serial = text.replace(/\s+/g, '').toUpperCase();
       if (!/^[A-Z0-9]{7}$/.test(serial)) {
-        await ctx.reply('Envie exatamente os 7 ultimos caracteres do serial, usando apenas letras e numeros.');
+        await ctx.reply('Envie somente os 7 ultimos caracteres do serial.');
         return;
       }
 
       await ctx.reply(
         state.serviceType === 'titularidade'
-          ? 'Buscando ONU ja provisionada no IXC...'
-          : 'Atualizando a lista de ONUs no IXC (Consultar todas) e buscando o serial...'
+          ? 'Buscando ONU cadastrada...'
+          : 'Buscando ONU na fila...'
       );
       state.serialSuffix = serial;
 
       if (state.serviceType === 'titularidade') {
         const authorizedOnus = await ixc.findAuthorizedOnusBySerialSuffix(serial);
         if (!authorizedOnus.length) {
-          await ctx.reply('Nao encontrei uma ONU ja provisionada com esse serial. Confira o serial ou envie /cancelar.');
+          await ctx.reply('Nao achei ONU cadastrada com esse serial.');
           return;
         }
 
         if (authorizedOnus.length === 1) {
           state.oldFiber = authorizedOnus[0];
           state.step = 'client';
-          await ctx.reply(`${formatAuthorizedOnu(state.oldFiber)}\n\nAgora envie o ID do novo cliente no IXC.`);
+          await ctx.reply(`${formatAuthorizedOnu(state.oldFiber)}\n\nEnvie o ID do novo cliente.`);
           return;
         }
 
         state.matches = authorizedOnus;
         state.step = 'titularoldonu_choose';
         await ctx.reply(
-          'Encontrei mais de um cadastro de fibra com esse serial. Escolha qual sera transferido:',
+          'Escolha o cadastro:',
           rowsKeyboard('titularoldonu', authorizedOnus, (onu) =>
             `${onu.id} - ${onu.mac || 'sem serial'} - contrato ${onu.id_contrato || '-'}`
           )
@@ -797,7 +795,7 @@ export const registerFlow = (bot, ixc, config) => {
           state.matches = authorizedOnus;
           state.step = 'oldonu_choose';
           await ctx.reply(
-            'Encontrei mais de um cadastro antigo para esse serial. Escolha qual deve ser removido:',
+            'Escolha o cadastro antigo:',
             rowsKeyboard('oldonu', authorizedOnus, (onu) =>
               `${onu.id} - ${onu.mac || 'sem serial'} - contrato ${onu.id_contrato || '-'}`
             )
@@ -807,7 +805,7 @@ export const registerFlow = (bot, ixc, config) => {
       }
 
       if (!onus.length) {
-        await ctx.reply('Nao encontrei ONU pendente com esse final de serial. Confira e envie novamente.');
+        await ctx.reply('Nao achei ONU pendente com esse serial.');
         return;
       }
 
@@ -816,16 +814,16 @@ export const registerFlow = (bot, ixc, config) => {
     }
 
     if (state.step === 'box_location') {
-      await ctx.reply('Nessa etapa, envie a localizacao atual usando o botao do Telegram.');
+      await ctx.reply('Use o botao para enviar a localizacao.');
       return;
     }
 
     if (state.step === 'box') {
-      await ctx.reply('Buscando caixa de atendimento...');
+      await ctx.reply('Buscando caixa...');
       const oltId = state.olt?.id || state.onu?.id_olt;
       const boxes = await ixc.findBoxes(text, oltId);
       if (!boxes.length) {
-        await ctx.reply('Nao encontrei essa caixa para a OLT da ONU. Envie o ID ou parte do nome da caixa.');
+        await ctx.reply('Caixa nao encontrada. Envie ID ou nome.');
         return;
       }
 
@@ -843,27 +841,27 @@ export const registerFlow = (bot, ixc, config) => {
     }
 
     if (state.step === 'port_choose') {
-      await ctx.reply('Escolha a porta livre pelo menu de botoes.');
+      await ctx.reply('Escolha a porta pelo menu.');
       return;
     }
 
     if (state.step === 'client') {
       if (!/^\d+$/.test(text)) {
-        await ctx.reply('Envie apenas o ID numerico do cliente.');
+        await ctx.reply('Envie apenas o ID do cliente.');
         return;
       }
 
-      await ctx.reply('Buscando cliente e contratos...');
+      await ctx.reply('Buscando cliente...');
       const client = await ixc.findClient(text);
       if (!client) {
-        await ctx.reply('Cliente nao encontrado. Confira o ID e envie novamente.');
+        await ctx.reply('Cliente nao encontrado.');
         return;
       }
 
       state.client = client;
       const contracts = await ixc.findContractsByClient(text);
       if (!contracts.length) {
-        await ctx.reply(`Cliente encontrado: ${short(client.razao)}\nMas nao encontrei contratos para esse cliente.`);
+        await ctx.reply(`${short(client.razao)}\nSem contratos encontrados.`);
         return;
       }
 
@@ -882,21 +880,21 @@ export const registerFlow = (bot, ixc, config) => {
 
     if (state.step === 'login_id') {
       if (!/^\d+$/.test(text)) {
-        await ctx.reply('Envie apenas o ID numerico do login PPPoE.');
+        await ctx.reply('Envie apenas o ID do PPPoE.');
         return;
       }
       const login = await ixc.read('radusuarios', text);
       if (!login) {
-        await ctx.reply('Login nao encontrado. Confira o ID e envie novamente.');
+        await ctx.reply('Login nao encontrado.');
         return;
       }
       state.login = login;
       if (state.serviceType === 'titularidade') {
-        await ctx.reply(`Login escolhido: ${formatLogin(login)}\n\nVou preparar a transferencia de titularidade...`);
+        await ctx.reply(`PPPoE: ${formatLogin(login)}\n\nPreparando transferencia...`);
         await askTitularityTransfer(ctx, state);
         return;
       }
-      await ctx.reply(`Login escolhido: ${formatLogin(login)}\n\nVou listar os scripts da OLT...`);
+      await ctx.reply(`PPPoE: ${formatLogin(login)}\n\nBuscando scripts...`);
       await clearLoginMacWithWarning(ctx, state, ixc);
       await askProfile(ctx, state, ixc);
       return;
@@ -913,7 +911,7 @@ const askProfile = async (ctx, state, ixc) => {
   if (!profiles.length) {
     state.step = 'profile_manual';
     await ctx.reply(
-      `Nao encontrei scripts para a OLT ${short(state.olt?.descricao)} (${short(state.olt?.fabricante_modelo)}). Cadastre os perfis no IXC ou envie /cancelar.`
+      `Nao achei script para esta OLT. Confira os perfis no IXC ou envie /cancelar.`
     );
     return;
   }
@@ -927,9 +925,8 @@ const askProfile = async (ctx, state, ixc) => {
   state.matches = ordered;
   state.step = 'profile_choose';
   const oltName = state.olt?.descricao || state.olt?.olt_nome || state.onu?.olt_nome;
-  const manufacturer = state.olt?.fabricante_modelo || state.onu?.modelo || state.onu?.mac;
   await ctx.reply(
-    `OLT: ${short(oltName)}\nFabricante/modelo: ${short(manufacturer)}\nScripts encontrados: ${ordered.length}\n\nEscolha o script de provisionamento:`,
+    `OLT: ${short(oltName)}\nScripts: ${ordered.length}\n\nEscolha o script:`,
     rowsKeyboard('profile', ordered, (profile) =>
       `${profile.id} - ${profile.nome}${String(profile.id) === String(defaultProfileId) ? ' (padrao)' : ''}`
     )
