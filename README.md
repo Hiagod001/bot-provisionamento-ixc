@@ -20,7 +20,8 @@ Bot em Node.js para guiar o tecnico pelo provisionamento de ONU no IXC Provedor.
 14. Tecnico escolhe o contrato correto.
 15. Bot busca o login PPPoE do contrato.
 16. Bot lista scripts/perfis de provisionamento conforme a OLT.
-17. Tecnico confirma e o bot cadastra a ONU no IXC.
+17. Tecnico confirma, o bot valida se o contrato ja esta ativo e so chama a ativacao quando necessario.
+18. Bot cadastra a ONU no IXC.
 
 ## Configuracao
 
@@ -63,7 +64,7 @@ Base oficial: `https://SEU_DOMINIO/webservice/v1/{tabela}`.
 | Login PPPoE | `radusuarios` | Buscar login vinculado ao contrato |
 | Scripts/perfis | `radpop_radio_cliente_fibra_perfil` | Listar scripts conforme fabricante/modelo da OLT |
 | Cadastro/provisionamento da ONU | `radpop_radio_cliente_fibra` | Criar a ONU com OLT, caixa, porta, contrato, login e perfil |
-| Ativacao de contrato | `cliente_contrato_ativar_cliente` | Tentar ativar contrato em instalacao e titularidade |
+| Ativacao de contrato | `cliente_contrato_ativar_cliente` | Tentar ativar contrato em instalacao e titularidade somente quando o contrato ainda nao estiver ativo |
 | Limpeza de MAC | `radusuarios_25452` | Limpar MAC do login na troca de equipamento e do login antigo na troca de titularidade |
 
 ## Observacoes importantes

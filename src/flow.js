@@ -218,8 +218,40 @@ const handleSwapAfterContractChoice = async (ctx, state, ixc) => {
   return true;
 };
 
+const normalizeContractStatus = (value) =>
+  short(value, '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+
+const isContractActive = (contract) => {
+  const status = normalizeContractStatus(contract?.status);
+  return status === 'A' || status === 'ATIVO' || status === 'ACTIVE';
+};
+
+const refreshSelectedContract = async (state, ixc) => {
+  if (!state.contract?.id) return;
+
+  const currentContract = await ixc.read('cliente_contrato', state.contract.id);
+  if (currentContract) {
+    state.contract = {
+      ...state.contract,
+      ...currentContract,
+      cidade_nome: currentContract.cidade_nome || state.contract.cidade_nome,
+    };
+  }
+};
+
 const activateContractWithWarning = async (ctx, state, ixc) => {
   if (!['instalacao', 'titularidade'].includes(state.serviceType)) return;
+
+  await refreshSelectedContract(state, ixc);
+
+  if (isContractActive(state.contract)) {
+    await ctx.reply(`Contrato ${short(state.contract?.id)} ja esta ativo no IXC. Vou seguir sem ativar novamente.`);
+    return;
+  }
 
   const response = await ixc.activateContract(state.contract.id);
   if (response?.type === 'error') {
