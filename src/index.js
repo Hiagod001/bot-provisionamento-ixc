@@ -22,9 +22,20 @@ bot.catch(async (error, ctx) => {
   );
 });
 
-bot.launch({ dropPendingUpdates: true });
+const launchWithRetry = async () => {
+  while (true) {
+    try {
+      await bot.launch({ dropPendingUpdates: true });
+      console.log(`Bot de provisionamento iniciado. DRY_RUN=${config.dryRun ? 'true' : 'false'}`);
+      return;
+    } catch (error) {
+      console.error(`Telegram indisponivel ao iniciar: ${error?.code || error?.message || error}`);
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+    }
+  }
+};
 
-console.log(`Bot de provisionamento iniciado. DRY_RUN=${config.dryRun ? 'true' : 'false'}`);
+await launchWithRetry();
 
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
