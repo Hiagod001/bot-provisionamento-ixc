@@ -10,7 +10,16 @@ registerFlow(bot, ixc, config);
 
 bot.catch(async (error, ctx) => {
   console.error('Erro no bot:', error);
-  await ctx.reply('Ocorreu um erro ao consultar o IXC. Tente novamente ou envie /cancelar.');
+  const reason = String(error?.message || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 350);
+  await ctx.reply(
+    reason
+      ? `Nao conclui o provisionamento.\n${reason}`
+      : 'Nao conclui o provisionamento. Tente novamente ou envie /cancelar.'
+  );
 });
 
 bot.launch({ dropPendingUpdates: true });

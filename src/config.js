@@ -21,12 +21,16 @@ const parseAllowedIds = (value) => {
     .filter(Boolean);
 };
 
+const optional = (name) => process.env[name]?.trim() || '';
+
 export const config = {
   telegramBotToken: required('TELEGRAM_BOT_TOKEN'),
   ixc: {
     baseUrl: required('IXC_BASE_URL').replace(/\/+$/, ''),
     token: required('IXC_TOKEN'),
     selfSigned: parseBoolean(process.env.IXC_SELF_SIGNED, true),
+    webEmail: optional('IXC_WEB_EMAIL'),
+    webPassword: optional('IXC_WEB_PASSWORD'),
   },
   dryRun: parseBoolean(process.env.DRY_RUN, true),
   allowedTelegramIds: parseAllowedIds(process.env.ALLOWED_TELEGRAM_IDS),

@@ -160,6 +160,52 @@ const assertNotIxcError = (response, action) => {
   }
 };
 
+const positiveInteger = (value) => {
+  const number = Number.parseInt(value, 10);
+  return Number.isFinite(number) && number > 0 ? number : null;
+};
+
+export const deriveProvisionNetworkFields = (rows, target) => {
+  const samePon = rows.filter(
+    (row) =>
+      String(row.id_transmissor) === String(target.id_transmissor) &&
+      String(row.slotno) === String(target.slotno) &&
+      String(row.ponno) === String(target.ponno)
+  );
+  const reference = samePon.find((row) => positiveInteger(row.vlan));
+  if (!reference) {
+    throw new Error(
+      `Nao encontrei uma VLAN valida para OLT ${target.id_transmissor}, slot ${target.slotno}, PON ${target.ponno}. Libere a consulta da interface da OLT no usuario da API.`
+    );
+  }
+
+  const usedOnuNumbers = new Set(
+    samePon.map((row) => positiveInteger(row.onu_numero)).filter(Boolean)
+  );
+  const requestedOnuNumber = positiveInteger(target.onu_numero);
+  const onuNumber =
+    requestedOnuNumber && !usedOnuNumbers.has(requestedOnuNumber)
+      ? requestedOnuNumber
+      : Array.from({ length: 128 }, (_, index) => index + 1).find(
+          (number) => !usedOnuNumbers.has(number)
+        );
+
+  if (!onuNumber) {
+    throw new Error(`Nao ha numero de ONU livre no slot ${target.slotno}, PON ${target.ponno}.`);
+  }
+
+  return {
+    vlan: String(reference.vlan),
+    vlan_pppoe: String(reference.vlan_pppoe || ''),
+    vlan_dhcp: String(reference.vlan_dhcp || ''),
+    vlan_tr69: String(reference.vlan_tr69 || ''),
+    vlan_iptv: String(reference.vlan_iptv || ''),
+    vlan_voip: String(reference.vlan_voip || ''),
+    vlan_outros: String(reference.vlan_outros || ''),
+    onu_numero: String(onuNumber),
+  };
+};
+
 const toNumber = (value) => {
   const number = Number(String(value).replace(',', '.'));
   return Number.isFinite(number) ? number : null;
@@ -180,7 +226,11 @@ const distanceMeters = (from, to) => {
 };
 
 export class IxcClient {
-  constructor({ baseUrl, token, selfSigned = true }) {
+  constructor({ baseUrl, token, selfSigned = true, webEmail = '', webPassword = '' }) {
+    this.origin = new URL(baseUrl).origin;
+    this.webEmail = webEmail;
+    this.webPassword = webPassword;
+    this.httpsAgent = new https.Agent({ rejectUnauthorized: !selfSigned });
     this.http = axios.create({
       baseURL: baseUrl,
       timeout: 60000,
@@ -188,9 +238,7 @@ export class IxcClient {
         Authorization: normalizeToken(token),
         'Content-Type': 'application/json',
       },
-      httpsAgent: new https.Agent({
-        rejectUnauthorized: !selfSigned,
-      }),
+      httpsAgent: this.httpsAgent,
     });
     this.boxCache = {
       expiresAt: 0,
@@ -558,26 +606,141 @@ export class IxcClient {
     );
   }
 
-  async provisionOnu(payload) {
-    const createResponse = await this.create('radpop_radio_cliente_fibra', payload.clienteFibra);
-    assertNotIxcError(createResponse, 'provisionar ONU');
+  async prepareProvisionPayload(payload) {
+    const target = payload.clienteFibra;
+    const rows = await this.list('radpop_radio_cliente_fibra', {
+      qtype: 'radpop_radio_cliente_fibra.id_transmissor',
+      query: String(target.id_transmissor),
+      oper: '=',
+      rp: '5000',
+      sortname: 'radpop_radio_cliente_fibra.id',
+      sortorder: 'desc',
+    });
+    const networkFields = deriveProvisionNetworkFields(rows, target);
+    return {
+      ...payload,
+      clienteFibra: { ...target, ...networkFields },
+    };
+  }
 
-    let deleteResponse = null;
-    if (payload.pendingOnuId) {
-      deleteResponse = await this.delete('fh_onu_nao_autorizadas', payload.pendingOnuId);
+  async findFiberClientsByMac(mac) {
+    return this.list('radpop_radio_cliente_fibra', {
+      qtype: 'radpop_radio_cliente_fibra.mac',
+      query: String(mac),
+      oper: '=',
+      rp: '20',
+      sortname: 'radpop_radio_cliente_fibra.id',
+      sortorder: 'desc',
+    });
+  }
+
+  async createWebSession() {
+    if (!this.webEmail || !this.webPassword) {
+      throw new Error(
+        'Autorizacao na OLT nao configurada. Informe IXC_WEB_EMAIL e IXC_WEB_PASSWORD de uma conta IXC dedicada, sem 2FA.'
+      );
     }
+
+    const cookies = new Map();
+    const captureCookies = (response) => {
+      for (const header of response.headers['set-cookie'] || []) {
+        const [pair] = header.split(';');
+        const separator = pair.indexOf('=');
+        if (separator > 0) cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
+      }
+    };
+    const request = async (url, options = {}) => {
+      const response = await axios({
+        url: `${this.origin}${url}`,
+        method: options.method || 'GET',
+        data: options.data,
+        headers: {
+          ...(cookies.size
+            ? { Cookie: [...cookies].map(([name, value]) => `${name}=${value}`).join('; ') }
+            : {}),
+          ...options.headers,
+        },
+        httpsAgent: this.httpsAgent,
+        timeout: 60000,
+        maxRedirects: 0,
+        validateStatus: (status) => status >= 200 && status < 400,
+      });
+      captureCookies(response);
+      return response;
+    };
+
+    await request('/adm.php');
+    const emailForm = new FormData();
+    emailForm.append('email', this.webEmail);
+    const emailResponse = await request('/login', { method: 'POST', data: emailForm });
+    if (!['password', 'token'].includes(emailResponse.data?.type)) {
+      throw new Error(emailResponse.data?.message?.body || 'Conta web do IXC nao reconhecida.');
+    }
+
+    const passwordForm = new FormData();
+    passwordForm.append('password', this.webPassword);
+    const passwordResponse = await request('/login', { method: 'POST', data: passwordForm });
+    if (passwordResponse.data?.type === 'token') {
+      throw new Error('A conta web do IXC exige 2FA. Use uma conta dedicada sem 2FA para o bot.');
+    }
+    if (
+      passwordResponse.status !== 302 &&
+      passwordResponse.data?.type !== 'redirect' &&
+      passwordResponse.data?.message?.type !== 'success'
+    ) {
+      throw new Error(passwordResponse.data?.message?.body || 'Falha no login web do IXC.');
+    }
+    return request;
+  }
+
+  async authorizeOnu(fiberId) {
+    const request = await this.createWebSession();
+    const path = `/aplicativo/radpop_radio_cliente_fibra/rel_22408.php?id=${encodeURIComponent(fiberId)}`;
+    const verify = await request(`${path}&verify=s`);
+    if (verify.data?.STATUS !== true) {
+      throw new Error('A OLT informou que esta ONU ja esta autorizada com outros dados.');
+    }
+
+    const response = await request(path);
+    const report = String(response.data || '');
+    if (/sess[aã]o foi finalizada|\b(erro|error|falha)\b/i.test(report)) {
+      throw new Error(`IXC nao confirmou a autorizacao na OLT: ${report.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300)}`);
+    }
+    return response.data;
+  }
+
+  async provisionOnu(payload) {
+    const prepared = await this.prepareProvisionPayload(payload);
+    const duplicates = await this.findFiberClientsByMac(prepared.clienteFibra.mac);
+    if (duplicates.length) {
+      throw new Error(
+        `Ja existe cadastro de fibra para esta ONU (ID ${duplicates[0].id}, contrato ${duplicates[0].id_contrato || '-'}). Remova ou transfira o cadastro antigo antes de instalar.`
+      );
+    }
+    if (!this.webEmail || !this.webPassword) {
+      throw new Error(
+        'Falta configurar a conta web do IXC para executar o botao Autorizar ONU. Nada foi gravado.'
+      );
+    }
+
+    const createResponse = await this.create('radpop_radio_cliente_fibra', prepared.clienteFibra);
+    assertNotIxcError(createResponse, 'provisionar ONU');
 
     const provisionedOnu = await this.findProvisionedOnu({
       createResponse,
-      mac: payload.clienteFibra.mac,
-      loginId: payload.clienteFibra.id_login,
-      contractId: payload.clienteFibra.id_contrato,
+      mac: prepared.clienteFibra.mac,
+      loginId: prepared.clienteFibra.id_login,
+      contractId: prepared.clienteFibra.id_contrato,
     });
+    if (!provisionedOnu?.id) throw new Error('Cadastro salvo, mas o IXC nao retornou o ID da ONU.');
+
+    await this.authorizeOnu(provisionedOnu.id);
+    const confirmed = await this.read('radpop_radio_cliente_fibra', provisionedOnu.id);
 
     return {
       createResponse,
-      deleteResponse,
-      provisionedOnu,
+      provisionedOnu: confirmed || provisionedOnu,
+      authorized: true,
     };
   }
 }

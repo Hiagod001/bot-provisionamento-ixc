@@ -393,7 +393,9 @@ const buildProvisionPayload = (state) => ({
     ponid: short(state.onu?.ponid || state.onu?.ponno, ''),
     slotno: short(state.onu?.slotno, ''),
     ponno: short(state.onu?.ponno, ''),
-    service_port: '0',
+    onu_numero: short(state.onu?.onu_numero, ''),
+    onu_tipo: short(state.onu?.modelo, ''),
+    service_port: '',
     id_chamado_radpop: '0',
     login_onu_cliente: 'admin',
     senha_onu_cliente: 'admin',
@@ -698,11 +700,6 @@ export const registerFlow = (bot, ixc, config) => {
     await activateContractWithWarning(ctx, state, ixc);
     const result = await ixc.provisionOnu(payload);
     await ctx.reply(buildProvisionSuccessMessage(state, result.provisionedOnu));
-    if (result.deleteResponse?.type === 'error') {
-      await ctx.reply(
-        `Aviso: provisionou, mas nao removi da fila. ${result.deleteResponse.message}`
-      );
-    }
     if (state.contractActivationWarning) {
       await ctx.reply(`Aviso: confira a ativacao. ${state.contractActivationWarning}`);
     }

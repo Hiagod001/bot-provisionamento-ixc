@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { selectProfilesForOlt } from '../src/ixcClient.js';
+import { deriveProvisionNetworkFields, selectProfilesForOlt } from '../src/ixcClient.js';
 
 const profiles = [
   { id: '87', nome: '(TESTE) ONU-BRIDGE-OLT01.PMS', fabricante_modelo: '' },
@@ -42,4 +42,32 @@ test('modelo Huawei da ONU nao transforma uma OLT FiberHome em Huawei', () => {
 test('fabricante Huawei por extenso tambem restringe o menu', () => {
   const selected = selectProfilesForOlt(profiles, { fabricante_modelo: 'HUAWEI' });
   assert.deepEqual(selected.map((profile) => profile.id), ['20', '26']);
+});
+
+test('calcula VLAN e proximo numero livre usando a mesma OLT, slot e PON', () => {
+  const rows = [
+    { id_transmissor: '7', slotno: '17', ponno: '10', onu_numero: '3', vlan: '3017' },
+    { id_transmissor: '7', slotno: '17', ponno: '10', onu_numero: '2', vlan: '3017' },
+    { id_transmissor: '7', slotno: '17', ponno: '10', onu_numero: '1', vlan: '3017' },
+    { id_transmissor: '1', slotno: '17', ponno: '10', onu_numero: '4', vlan: '1017' },
+  ];
+  const result = deriveProvisionNetworkFields(rows, {
+    id_transmissor: '7',
+    slotno: '17',
+    ponno: '10',
+  });
+  assert.equal(result.vlan, '3017');
+  assert.equal(result.onu_numero, '4');
+});
+
+test('nao aceita provisionamento sem uma VLAN conhecida para a interface', () => {
+  assert.throws(
+    () =>
+      deriveProvisionNetworkFields([], {
+        id_transmissor: '7',
+        slotno: '17',
+        ponno: '10',
+      }),
+    /Nao encontrei uma VLAN valida/
+  );
 });
