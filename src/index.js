@@ -1,7 +1,10 @@
+import dns from 'node:dns';
 import { Telegraf } from 'telegraf';
 import { config } from './config.js';
 import { IxcClient } from './ixcClient.js';
 import { registerFlow } from './flow.js';
+
+dns.setDefaultResultOrder('ipv4first');
 
 const bot = new Telegraf(config.telegramBotToken);
 const ixc = new IxcClient(config.ixc);
