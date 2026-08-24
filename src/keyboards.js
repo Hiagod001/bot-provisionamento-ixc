@@ -1,5 +1,8 @@
 import { Markup } from 'telegraf';
 
+export const provisionKeyboard = () =>
+  Markup.inlineKeyboard([[Markup.button.callback('Provisionar', 'provision:start')]]);
+
 export const serviceKeyboard = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('Instalacao', 'service:instalacao')],

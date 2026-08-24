@@ -3,6 +3,7 @@ import {
   locationKeyboard,
   oldFiberKeyboard,
   portsKeyboard,
+  provisionKeyboard,
   rowsKeyboard,
   serviceKeyboard,
   swapOldFiberKeyboard,
@@ -61,6 +62,18 @@ const mustChooseMessage = 'Use os botoes da mensagem anterior ou envie /cancelar
 const ensureAllowed = (ctx, allowedIds) => {
   if (!allowedIds.length) return true;
   return allowedIds.includes(String(ctx.from?.id));
+};
+
+const askProvisionStart = async (ctx) => {
+  await ctx.reply(
+    'Opa! Eu sou o bot de provisionamento.\n\nToque em Provisionar para comecar.',
+    provisionKeyboard()
+  );
+};
+
+const askServiceChoice = async (ctx) => {
+  resetSession(ctx);
+  await ctx.reply('Escolha o servico:', serviceKeyboard());
 };
 
 const askSerial = async (ctx, state) => {
@@ -453,15 +466,11 @@ export const registerFlow = (bot, ixc, config) => {
 
   bot.start(async (ctx) => {
     resetSession(ctx);
-    await ctx.reply(
-      'Provisionamento IXC\n\nEscolha o servico:',
-      serviceKeyboard()
-    );
+    await askProvisionStart(ctx);
   });
 
   bot.command('provisionar', async (ctx) => {
-    resetSession(ctx);
-    await ctx.reply('Escolha o servico:', serviceKeyboard());
+    await askServiceChoice(ctx);
   });
 
   bot.command('cancelar', async (ctx) => {
@@ -472,6 +481,11 @@ export const registerFlow = (bot, ixc, config) => {
   bot.command('status', async (ctx) => {
     const state = getSession(ctx);
     await ctx.reply(`Etapa atual: ${state.step}`);
+  });
+
+  bot.action(/^provision:start$/, async (ctx) => {
+    await ctx.answerCbQuery('Vamos la');
+    await askServiceChoice(ctx);
   });
 
   bot.action(/^service:/, async (ctx) => {
@@ -736,7 +750,7 @@ export const registerFlow = (bot, ixc, config) => {
     const text = ctx.message.text.trim();
 
     if (state.step === 'service') {
-      await ctx.reply(mustChooseMessage);
+      await askProvisionStart(ctx);
       return;
     }
 
@@ -900,7 +914,7 @@ export const registerFlow = (bot, ixc, config) => {
       return;
     }
 
-    await ctx.reply(mustChooseMessage);
+    await askProvisionStart(ctx);
   });
 };
 
