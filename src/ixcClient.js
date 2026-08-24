@@ -672,23 +672,43 @@ export class IxcClient {
     await request('/adm.php');
     const emailForm = new FormData();
     emailForm.append('email', this.webEmail);
-    const emailResponse = await request('/login', { method: 'POST', data: emailForm });
-    if (!['password', 'token'].includes(emailResponse.data?.type)) {
-      throw new Error(emailResponse.data?.message?.body || 'Conta web do IXC nao reconhecida.');
+    const loginPath = '/api-module/auth/login';
+    const emailResponse = await request(loginPath, { method: 'POST', data: emailForm });
+    const emailResult = emailResponse.data?.data || emailResponse.data;
+    if (!['password', 'token'].includes(emailResult?.type)) {
+      throw new Error(
+        emailResponse.data?.messages?.[0]?.body ||
+          emailResponse.data?.message?.body ||
+          'Conta web do IXC nao reconhecida.'
+      );
     }
 
-    const passwordForm = new FormData();
-    passwordForm.append('password', this.webPassword);
-    const passwordResponse = await request('/login', { method: 'POST', data: passwordForm });
-    if (passwordResponse.data?.type === 'token') {
+    const sendPassword = () => {
+      const passwordForm = new FormData();
+      passwordForm.append('password', this.webPassword);
+      return request(loginPath, { method: 'POST', data: passwordForm });
+    };
+    let passwordResponse = await sendPassword();
+    if (
+      passwordResponse.data?.status === '0' &&
+      /sessao ativa|sessão ativa/i.test(passwordResponse.data?.messages?.[0]?.body || '')
+    ) {
+      passwordResponse = await sendPassword();
+    }
+    const passwordResult = passwordResponse.data?.data || passwordResponse.data;
+    if (passwordResult?.type === 'token') {
       throw new Error('A conta web do IXC exige 2FA. Use uma conta dedicada sem 2FA para o bot.');
     }
     if (
       passwordResponse.status !== 302 &&
-      passwordResponse.data?.type !== 'redirect' &&
-      passwordResponse.data?.message?.type !== 'success'
+      passwordResult?.type !== 'redirect' &&
+      passwordResult?.message?.type !== 'success'
     ) {
-      throw new Error(passwordResponse.data?.message?.body || 'Falha no login web do IXC.');
+      throw new Error(
+        passwordResponse.data?.messages?.[0]?.body ||
+          passwordResult?.message?.body ||
+          'Falha no login web do IXC.'
+      );
     }
     return request;
   }

@@ -390,6 +390,7 @@ const buildProvisionPayload = (state) => ({
     nome: short(state.client?.razao || state.login?.login || state.onu?.mac, 'ONU provisionada pelo bot'),
     mac: short(state.onu?.mac || state.onu?.Chassi, ''),
     id_perfil: short(state.profile?.id, ''),
+    comandos: short(state.profile?.comando || state.profile?.comandos, ''),
     ponid: short(state.onu?.ponid || state.onu?.ponno, ''),
     slotno: short(state.onu?.slotno, ''),
     ponno: short(state.onu?.ponno, ''),
