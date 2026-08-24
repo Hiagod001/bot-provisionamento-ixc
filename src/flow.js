@@ -4,6 +4,7 @@ import {
   oldFiberKeyboard,
   portsKeyboard,
   provisionKeyboard,
+  retryProvisionKeyboard,
   rowsKeyboard,
   serviceKeyboard,
   swapOldFiberKeyboard,
@@ -680,8 +681,18 @@ export const registerFlow = (bot, ixc, config) => {
 
   bot.action(/^confirm:/, async (ctx) => {
     const state = getSession(ctx);
-    const accepted = ctx.callbackQuery.data === 'confirm:yes';
-    await ctx.answerCbQuery(accepted ? 'Confirmado' : 'Cancelado');
+    const action = ctx.callbackQuery.data;
+    const accepted = action === 'confirm:yes' || action === 'confirm:retry';
+    const expectedStep = action === 'confirm:retry' ? 'retry' : 'confirm';
+
+    if (accepted && state.step !== expectedStep) {
+      await ctx.answerCbQuery('Esta tentativa ja expirou');
+      return;
+    }
+
+    await ctx.answerCbQuery(
+      action === 'confirm:retry' ? 'Tentando novamente' : accepted ? 'Confirmado' : 'Cancelado'
+    );
 
     if (!accepted) {
       resetSession(ctx);
@@ -698,16 +709,31 @@ export const registerFlow = (bot, ixc, config) => {
       return;
     }
 
-    await activateContractWithWarning(ctx, state, ixc);
-    const result = await ixc.provisionOnu(payload);
-    await ctx.reply(buildProvisionSuccessMessage(state, result.provisionedOnu));
-    if (state.contractActivationWarning) {
-      await ctx.reply(`Aviso: confira a ativacao. ${state.contractActivationWarning}`);
+    state.step = 'provisioning';
+    try {
+      await activateContractWithWarning(ctx, state, ixc);
+      const result = await ixc.provisionOnu(payload);
+      await ctx.reply(buildProvisionSuccessMessage(state, result.provisionedOnu));
+      if (state.contractActivationWarning) {
+        await ctx.reply(`Aviso: confira a ativacao. ${state.contractActivationWarning}`);
+      }
+      if (state.macCleanupWarning) {
+        await ctx.reply(`Aviso: confira a limpeza do MAC. ${state.macCleanupWarning}`);
+      }
+      resetSession(ctx);
+    } catch (error) {
+      console.error('Provisionamento nao concluido:', error);
+      state.step = 'retry';
+      const reason = String(error?.message || 'Falha ao consultar o IXC.')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 350);
+      await ctx.reply(
+        `Nao consegui provisionar.\n${reason}\n\nApos o NOC corrigir, tente novamente.`,
+        retryProvisionKeyboard()
+      );
     }
-    if (state.macCleanupWarning) {
-      await ctx.reply(`Aviso: confira a limpeza do MAC. ${state.macCleanupWarning}`);
-    }
-    resetSession(ctx);
   });
 
   bot.on('location', async (ctx) => {

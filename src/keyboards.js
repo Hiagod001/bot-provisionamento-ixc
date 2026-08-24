@@ -30,6 +30,12 @@ export const confirmKeyboard = () =>
     [Markup.button.callback('Cancelar', 'confirm:no')],
   ]);
 
+export const retryProvisionKeyboard = () =>
+  Markup.inlineKeyboard([
+    [Markup.button.callback('Tentar novamente', 'confirm:retry')],
+    [Markup.button.callback('Cancelar', 'confirm:no')],
+  ]);
+
 export const oldFiberKeyboard = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('Desautorizar e remover cadastro antigo', 'oldfiber:delete')],
