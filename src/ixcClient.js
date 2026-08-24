@@ -88,6 +88,60 @@ const profileMatchesManufacturer = (profile, aliases) => {
   return manufacturerKeywords(aliases).some((keyword) => name.includes(keyword));
 };
 
+const compactName = (value) =>
+  String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+
+const identifyPmsOlt = (olt, onu) => {
+  const name = compactName([olt?.descricao, olt?.olt_nome, olt?.nome, onu?.olt_nome].filter(Boolean).join(' '));
+  if (/OLT0?1PMS|OLTPMS0?1|PMSOLT0?1|PMS0?1OLT/.test(name)) return '01';
+  if (/OLT0?2PMS|OLTPMS0?2|PMSOLT0?2|PMS0?2OLT/.test(name)) return '02';
+  return null;
+};
+
+export const selectProfilesForOlt = (rows, olt, onu = null) => {
+  const pmsOlt = identifyPmsOlt(olt, onu);
+  if (pmsOlt) {
+    return rows.filter((profile) => {
+      const name = compactName(profile.nome);
+      return (
+        name.endsWith(`ONUBRIDGEOLT${pmsOlt}PMS`) ||
+        name.endsWith(`ONUINTEGRADAOLT${pmsOlt}PMS`)
+      );
+    });
+  }
+
+  const oltAliases = [
+    String(olt?.fabricante_modelo || '').trim().toUpperCase(),
+    ...inferManufacturerAliases(
+      olt?.fabricante_modelo,
+      olt?.olt_nome,
+      olt?.descricao,
+      olt?.nome
+    ),
+  ].filter(Boolean);
+  const uniqueOltAliases = [...new Set(oltAliases)];
+
+  if (uniqueOltAliases.includes('HW')) {
+    return rows.filter((profile) => {
+      const name = compactName(profile.nome);
+      return (
+        name.includes('HBRIDGEAPENASOLTHUAWEI') ||
+        name.includes('HINTEGRADAAPENASOLTHUAWEI')
+      );
+    });
+  }
+
+  const fallbackAliases = inferManufacturerAliases(onu?.modelo, onu?.mac);
+  const uniqueAliases = uniqueOltAliases.length ? uniqueOltAliases : [...new Set(fallbackAliases)];
+
+  const compatible = rows.filter((profile) => profileMatchesManufacturer(profile, uniqueAliases));
+  return compatible.length ? compatible : rows;
+};
+
 const extractCreatedId = (response) => {
   const candidates = [
     response?.id,
@@ -468,19 +522,13 @@ export class IxcClient {
   }
 
   async findProfilesByOlt(olt, onu = null) {
-    const aliases = [
-      String(olt?.fabricante_modelo || '').trim().toUpperCase(),
-      ...inferManufacturerAliases(olt?.olt_nome, olt?.descricao, onu?.modelo, onu?.mac),
-    ].filter(Boolean);
-    const uniqueAliases = [...new Set(aliases)];
     const rows = await this.list('radpop_radio_cliente_fibra_perfil', {
       rp: '500',
       sortname: 'radpop_radio_cliente_fibra_perfil.nome',
       sortorder: 'asc',
     });
 
-    const compatible = rows.filter((profile) => profileMatchesManufacturer(profile, uniqueAliases));
-    return compatible.length ? compatible : rows;
+    return selectProfilesForOlt(rows, olt, onu);
   }
 
   async findProvisionedOnu({ createResponse, mac, loginId, contractId }) {
