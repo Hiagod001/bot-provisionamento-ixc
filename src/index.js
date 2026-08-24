@@ -28,8 +28,9 @@ bot.catch(async (error, ctx) => {
 const launchWithRetry = async () => {
   while (true) {
     try {
-      await bot.launch({ dropPendingUpdates: true });
+      bot.botInfo = await bot.telegram.getMe();
       console.log(`Bot de provisionamento iniciado. DRY_RUN=${config.dryRun ? 'true' : 'false'}`);
+      await bot.launch({ dropPendingUpdates: true });
       return;
     } catch (error) {
       console.error(`Telegram indisponivel ao iniciar: ${error?.code || error?.message || error}`);
