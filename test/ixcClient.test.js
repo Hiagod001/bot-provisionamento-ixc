@@ -137,6 +137,7 @@ test('provisionamento executa o botao Autorizar ONU usando o ID do cliente fibra
     pendingOnuId: '1056',
     clienteFibra: { mac: 'ABC123', id_login: '30', id_contrato: '20' },
   });
+  client.ensureOnuAuthorizationApiAvailable = async () => calls.push(['preflight']);
   client.findFiberClientsByMac = async () => [];
   client.create = async () => ({ id: '50760' });
   client.findProvisionedOnu = async () => ({ id: '50760', mac: 'ABC123' });
@@ -147,8 +148,22 @@ test('provisionamento executa o botao Autorizar ONU usando o ID do cliente fibra
   const result = await client.provisionOnu({});
 
   assert.deepEqual(calls, [
+    ['preflight'],
     ['pending', '1056'],
     ['olt', '50760'],
   ]);
   assert.equal(result.authorized, true);
+});
+
+test('preflight bloqueia cadastro parcial quando API de Autorizar ONU nao esta liberada', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.actionPost = async () => ({
+    type: 'error',
+    message: 'Recurso radpop_radio_cliente_fibra_22408 não está disponível!',
+  });
+
+  await assert.rejects(
+    () => client.ensureOnuAuthorizationApiAvailable(),
+    /radpop_radio_cliente_fibra_22408/
+  );
 });

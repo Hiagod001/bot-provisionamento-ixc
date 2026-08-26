@@ -253,10 +253,7 @@ const distanceMeters = (from, to) => {
 };
 
 export class IxcClient {
-  constructor({ baseUrl, token, selfSigned = true, webEmail = '', webPassword = '', os = {} }) {
-    this.origin = new URL(baseUrl).origin;
-    this.webEmail = webEmail;
-    this.webPassword = webPassword;
+  constructor({ baseUrl, token, selfSigned = true, os = {} }) {
     this.os = {
       enabled: os.enabled !== false,
       subjectId: String(os.subjectId || '7'),
@@ -671,99 +668,21 @@ export class IxcClient {
     });
   }
 
-  async createWebSession() {
-    if (!this.webEmail || !this.webPassword) {
+  async ensureOnuAuthorizationApiAvailable() {
+    const response = await this.actionPost('radpop_radio_cliente_fibra_22408', { get_id: '0' });
+    if (/n[aã]o est[aá] dispon[ií]vel/i.test(String(response?.message || ''))) {
       throw new Error(
-        'Autorizacao na OLT nao configurada. Informe IXC_WEB_EMAIL e IXC_WEB_PASSWORD de uma conta IXC dedicada, sem 2FA.'
+        'A API do IXC ainda nao liberou o recurso radpop_radio_cliente_fibra_22408 para Autorizar ONU.'
       );
     }
-
-    const cookies = new Map();
-    const captureCookies = (response) => {
-      for (const header of response.headers['set-cookie'] || []) {
-        const [pair] = header.split(';');
-        const separator = pair.indexOf('=');
-        if (separator > 0) cookies.set(pair.slice(0, separator), pair.slice(separator + 1));
-      }
-    };
-    const request = async (url, options = {}) => {
-      const response = await axios({
-        url: `${this.origin}${url}`,
-        method: options.method || 'GET',
-        data: options.data,
-        headers: {
-          ...(cookies.size
-            ? { Cookie: [...cookies].map(([name, value]) => `${name}=${value}`).join('; ') }
-            : {}),
-          ...options.headers,
-        },
-        httpsAgent: this.httpsAgent,
-        timeout: 60000,
-        maxRedirects: 0,
-        validateStatus: (status) => status >= 200 && status < 400,
-      });
-      captureCookies(response);
-      return response;
-    };
-
-    await request('/adm.php');
-    const emailForm = new FormData();
-    emailForm.append('email', this.webEmail);
-    const loginPath = '/api-module/auth/login';
-    const emailResponse = await request(loginPath, { method: 'POST', data: emailForm });
-    const emailResult = emailResponse.data?.data || emailResponse.data;
-    if (!['password', 'token'].includes(emailResult?.type)) {
-      throw new Error(
-        emailResponse.data?.messages?.[0]?.body ||
-          emailResponse.data?.message?.body ||
-          'Conta web do IXC nao reconhecida.'
-      );
-    }
-
-    const sendPassword = () => {
-      const passwordForm = new FormData();
-      passwordForm.append('password', this.webPassword);
-      return request(loginPath, { method: 'POST', data: passwordForm });
-    };
-    let passwordResponse = await sendPassword();
-    if (
-      passwordResponse.data?.status === '0' &&
-      /sessao ativa|sessão ativa/i.test(passwordResponse.data?.messages?.[0]?.body || '')
-    ) {
-      passwordResponse = await sendPassword();
-    }
-    const passwordResult = passwordResponse.data?.data || passwordResponse.data;
-    if (passwordResult?.type === 'token') {
-      throw new Error('A conta web do IXC exige 2FA. Use uma conta dedicada sem 2FA para o bot.');
-    }
-    if (
-      passwordResponse.status !== 302 &&
-      passwordResult?.type !== 'redirect' &&
-      passwordResult?.message?.type !== 'success'
-    ) {
-      throw new Error(
-        passwordResponse.data?.messages?.[0]?.body ||
-          passwordResult?.message?.body ||
-          'Falha no login web do IXC.'
-      );
-    }
-    return request;
   }
 
   async authorizeOnu(fiberId) {
-    const request = await this.createWebSession();
-    const path = `/aplicativo/radpop_radio_cliente_fibra/rel_22408.php?id=${encodeURIComponent(fiberId)}`;
-    const verify = await request(`${path}&verify=s`);
-    if (verify.data?.STATUS !== true) {
-      throw new Error('A OLT informou que esta ONU ja esta autorizada com outros dados.');
-    }
-
-    const response = await request(path);
-    const report = String(response.data || '');
-    if (/sess[aã]o foi finalizada|\b(erro|error|falha)\b/i.test(report)) {
-      throw new Error(`IXC nao confirmou a autorizacao na OLT: ${report.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300)}`);
-    }
-    return response.data;
+    const response = await this.actionPost('radpop_radio_cliente_fibra_22408', {
+      get_id: String(fiberId),
+    });
+    assertNotIxcError(response, 'autorizar ONU na OLT pela API');
+    return response;
   }
 
   async authorizePendingOnu(pendingOnuId) {
@@ -900,6 +819,7 @@ export class IxcClient {
 
   async provisionOnu(payload) {
     const prepared = await this.prepareProvisionPayload(payload);
+    await this.ensureOnuAuthorizationApiAvailable();
     const duplicates = await this.findFiberClientsByMac(prepared.clienteFibra.mac);
     if (duplicates.length) {
       throw new Error(

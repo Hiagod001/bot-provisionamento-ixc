@@ -29,8 +29,6 @@ export const config = {
     baseUrl: required('IXC_BASE_URL').replace(/\/+$/, ''),
     token: required('IXC_TOKEN'),
     selfSigned: parseBoolean(process.env.IXC_SELF_SIGNED, true),
-    webEmail: optional('IXC_WEB_EMAIL'),
-    webPassword: optional('IXC_WEB_PASSWORD'),
     os: {
       enabled: parseBoolean(process.env.IXC_OS_ENABLED, true),
       subjectId: optional('IXC_OS_SUBJECT_ID') || '7',
