@@ -243,10 +243,24 @@ const isContractActive = (contract) => {
   return status === 'A' || status === 'ATIVO' || status === 'ACTIVE';
 };
 
+const isTransientIxcError = (error) =>
+  ['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN'].includes(error?.code);
+
 const refreshSelectedContract = async (state, ixc) => {
   if (!state.contract?.id) return;
 
-  const currentContract = await ixc.read('cliente_contrato', state.contract.id);
+  let currentContract;
+  try {
+    currentContract = await ixc.read('cliente_contrato', state.contract.id);
+  } catch (error) {
+    if (isTransientIxcError(error) && normalizeContractStatus(state.contract?.status)) {
+      console.warn(
+        `IXC oscilou ao reler o contrato ${state.contract.id}; usando o status obtido na selecao.`
+      );
+      return;
+    }
+    throw error;
+  }
   if (currentContract) {
     state.contract = {
       ...state.contract,
@@ -732,7 +746,11 @@ export const registerFlow = (bot, ixc, config) => {
             );
           }
         } catch (osError) {
-          console.error('ONU provisionada, mas a OS nao foi concluida:', osError);
+          console.error(
+            'ONU provisionada, mas a OS nao foi concluida:',
+            osError?.code || '',
+            osError?.message || osError
+          );
           await ctx.reply(
             `ONU provisionada, mas confira a OS no IXC: ${String(osError?.message || osError)}`
           );
@@ -746,7 +764,11 @@ export const registerFlow = (bot, ixc, config) => {
       }
       resetSession(ctx);
     } catch (error) {
-      console.error('Provisionamento nao concluido:', error);
+      console.error(
+        'Provisionamento nao concluido:',
+        error?.code || '',
+        error?.message || error
+      );
       state.step = 'retry';
       const reason = String(error?.message || 'Falha ao consultar o IXC.')
         .replace(/<[^>]+>/g, ' ')

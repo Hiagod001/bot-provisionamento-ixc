@@ -12,7 +12,7 @@ const ixc = new IxcClient(config.ixc);
 registerFlow(bot, ixc, config);
 
 bot.catch(async (error, ctx) => {
-  console.error('Erro no bot:', error);
+  console.error('Erro no bot:', error?.code || '', error?.message || error);
   const reason = String(error?.message || '')
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
