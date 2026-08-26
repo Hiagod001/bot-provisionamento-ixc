@@ -360,11 +360,59 @@ export class IxcClient {
   }
 
   async listPendingOnus({ refresh = true } = {}) {
-    const response = await this.http.get('/fh_onu_nao_autorizadas', {
-      headers: { ixcsoft: 'listar' },
-      data: refresh ? { consultar_onu: 'S' } : undefined,
+    if (!refresh) return this.list('fh_onu_nao_autorizadas');
+
+    let olts = await this.list('radpop_radio', {
+      rp: '2000',
+      grid_param: JSON.stringify([
+        { TB: 'ativo', OP: '=', P: 'S' },
+      ]),
     });
-    return dataRows(response);
+    if (!olts.length) {
+      const [fibers, cachedPending] = await Promise.all([
+        this.list('radpop_radio_cliente_fibra', {
+          qtype: 'radpop_radio_cliente_fibra.id',
+          query: '0',
+          oper: '>',
+          rp: '10000',
+          sortname: 'radpop_radio_cliente_fibra.id',
+          sortorder: 'desc',
+        }),
+        this.list('fh_onu_nao_autorizadas'),
+      ]);
+      const ids = new Set([
+        ...fibers.map((fiber) => fiber.id_transmissor),
+        ...cachedPending.map((row) => normalizePendingOnu(row).id_olt),
+      ].filter(Boolean).map(String));
+      olts = [...ids].map((id) => ({ id }));
+    }
+    if (!olts.length) {
+      throw new Error(
+        'Nao encontrei OLTs para consultar. Libere a listagem de Transmissores (radpop_radio) no usuario da API.'
+      );
+    }
+
+    const results = await Promise.allSettled(
+      olts.map((olt) =>
+        this.list('fh_onu_nao_autorizadas', {
+          rp: '10000',
+          sortname: 'fh_onu_nao_autorizadas.id',
+          sortorder: 'asc',
+          grid_param: JSON.stringify([{ TB: 'id_olt', OP: '=', P: String(olt.id) }]),
+        })
+      )
+    );
+    const successful = results.filter((result) => result.status === 'fulfilled');
+    if (!successful.length) throw results[0].reason;
+
+    const unique = new Map();
+    for (const result of successful) {
+      for (const row of result.value) {
+        const key = String(row.id || row.MAC || row.mac || JSON.stringify(row));
+        unique.set(key, row);
+      }
+    }
+    return [...unique.values()];
   }
 
   filterPendingOnusBySerialSuffix(rows, suffix) {

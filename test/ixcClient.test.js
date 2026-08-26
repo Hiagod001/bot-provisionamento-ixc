@@ -183,3 +183,45 @@ test('Gravar dispositivo usa o endpoint 22408 e o ID do cliente fibra', async ()
     payload: { id: '50760' },
   });
 });
+
+test('Consultar todas atualiza a fila separadamente para cada OLT ativa', async () => {
+  const client = Object.create(IxcClient.prototype);
+  const calls = [];
+  client.list = async (resource, params = {}) => {
+    calls.push({ resource, params });
+    if (resource === 'radpop_radio') return [{ id: '7' }, { id: '1056' }];
+    const oltId = JSON.parse(params.grid_param)[0].P;
+    return [{ id: `onu-${oltId}`, mac: `SERIAL-${oltId}` }];
+  };
+
+  const rows = await client.listPendingOnus({ refresh: true });
+
+  assert.deepEqual(rows.map((row) => row.id), ['onu-7', 'onu-1056']);
+  assert.equal(calls[0].resource, 'radpop_radio');
+  assert.deepEqual(
+    calls.slice(1).map((call) => JSON.parse(call.params.grid_param)[0]),
+    [
+      { TB: 'id_olt', OP: '=', P: '7' },
+      { TB: 'id_olt', OP: '=', P: '1056' },
+    ]
+  );
+});
+
+test('Consultar todas usa transmissores dos clientes fibra quando radpop_radio nao esta liberado', async () => {
+  const client = Object.create(IxcClient.prototype);
+  const consulted = [];
+  client.list = async (resource, params = {}) => {
+    if (resource === 'radpop_radio') return [];
+    if (resource === 'radpop_radio_cliente_fibra') {
+      return [{ id_transmissor: '7' }, { id_transmissor: '1056' }];
+    }
+    if (!params.grid_param) return [];
+    const oltId = JSON.parse(params.grid_param)[0].P;
+    consulted.push(oltId);
+    return [];
+  };
+
+  await client.listPendingOnus({ refresh: true });
+
+  assert.deepEqual(consulted, ['7', '1056']);
+});
