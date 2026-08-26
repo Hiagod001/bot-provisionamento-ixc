@@ -918,6 +918,7 @@ export class IxcClient {
     if (!provisionedOnu?.id) throw new Error('Cadastro salvo, mas o IXC nao retornou o ID da ONU.');
 
     await this.authorizePendingOnu(prepared.pendingOnuId);
+    await this.authorizeOnu(provisionedOnu.id);
     const confirmed = await this.read('radpop_radio_cliente_fibra', provisionedOnu.id);
 
     return {

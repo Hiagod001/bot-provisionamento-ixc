@@ -129,3 +129,26 @@ test('fechamento da OS marca finalizar atendimento no payload nativo', async () 
   assert.equal(closeCall.payload.finaliza_processo, 'S');
   assert.equal(closeCall.payload.status, 'F');
 });
+
+test('provisionamento executa o botao Autorizar ONU usando o ID do cliente fibra', async () => {
+  const client = Object.create(IxcClient.prototype);
+  const calls = [];
+  client.prepareProvisionPayload = async () => ({
+    pendingOnuId: '1056',
+    clienteFibra: { mac: 'ABC123', id_login: '30', id_contrato: '20' },
+  });
+  client.findFiberClientsByMac = async () => [];
+  client.create = async () => ({ id: '50760' });
+  client.findProvisionedOnu = async () => ({ id: '50760', mac: 'ABC123' });
+  client.authorizePendingOnu = async (id) => calls.push(['pending', id]);
+  client.authorizeOnu = async (id) => calls.push(['olt', id]);
+  client.read = async () => ({ id: '50760', mac: 'ABC123' });
+
+  const result = await client.provisionOnu({});
+
+  assert.deepEqual(calls, [
+    ['pending', '1056'],
+    ['olt', '50760'],
+  ]);
+  assert.equal(result.authorized, true);
+});
