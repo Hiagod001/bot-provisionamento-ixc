@@ -159,11 +159,27 @@ test('preflight bloqueia cadastro parcial quando API de Autorizar ONU nao esta l
   const client = Object.create(IxcClient.prototype);
   client.actionPost = async () => ({
     type: 'error',
-    message: 'Recurso radpop_radio_cliente_fibra_22408 não está disponível!',
+    message: 'Recurso botao_gravar_dispositivo_22408 não está disponível!',
   });
 
   await assert.rejects(
     () => client.ensureOnuAuthorizationApiAvailable(),
-    /radpop_radio_cliente_fibra_22408/
+    /botao_gravar_dispositivo_22408/
   );
+});
+
+test('Gravar dispositivo usa o endpoint 22408 e o ID do cliente fibra', async () => {
+  const client = Object.create(IxcClient.prototype);
+  let request;
+  client.actionPost = async (resource, payload) => {
+    request = { resource, payload };
+    return 'Dispositivo gravado com sucesso.';
+  };
+
+  await client.authorizeOnu('50760');
+
+  assert.deepEqual(request, {
+    resource: 'botao_gravar_dispositivo_22408',
+    payload: { id: '50760' },
+  });
 });

@@ -155,8 +155,9 @@ const extractCreatedId = (response) => {
 };
 
 const assertNotIxcError = (response, action) => {
-  if (response?.type === 'error') {
-    throw new Error(`IXC retornou erro ao ${action}: ${response.message || 'erro sem mensagem'}`);
+  const message = typeof response === 'string' ? response : response?.message;
+  if (response?.type === 'error' || /^\s*(erro|falha)\b/i.test(String(message || ''))) {
+    throw new Error(`IXC retornou erro ao ${action}: ${message || 'erro sem mensagem'}`);
   }
 };
 
@@ -669,19 +670,20 @@ export class IxcClient {
   }
 
   async ensureOnuAuthorizationApiAvailable() {
-    const response = await this.actionPost('radpop_radio_cliente_fibra_22408', { get_id: '0' });
-    if (/n[aã]o est[aá] dispon[ií]vel/i.test(String(response?.message || ''))) {
+    const response = await this.actionPost('botao_gravar_dispositivo_22408', { id: '0' });
+    const message = typeof response === 'string' ? response : response?.message;
+    if (/n[aã]o est[aá] dispon[ií]vel/i.test(String(message || ''))) {
       throw new Error(
-        'A API do IXC ainda nao liberou o recurso radpop_radio_cliente_fibra_22408 para Autorizar ONU.'
+        'A API do IXC ainda nao liberou o recurso botao_gravar_dispositivo_22408.'
       );
     }
   }
 
   async authorizeOnu(fiberId) {
-    const response = await this.actionPost('radpop_radio_cliente_fibra_22408', {
-      get_id: String(fiberId),
+    const response = await this.actionPost('botao_gravar_dispositivo_22408', {
+      id: String(fiberId),
     });
-    assertNotIxcError(response, 'autorizar ONU na OLT pela API');
+    assertNotIxcError(response, 'gravar ONU no dispositivo pela API');
     return response;
   }
 
