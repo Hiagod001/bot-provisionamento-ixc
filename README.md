@@ -21,7 +21,9 @@ Bot em Node.js para guiar o tecnico pelo provisionamento de ONU no IXC Provedor.
 15. Bot busca o login PPPoE do contrato.
 16. Bot lista scripts/perfis de provisionamento conforme a OLT.
 17. Tecnico confirma, o bot valida se o contrato ja esta ativo e so chama a ativacao quando necessario.
-18. Bot cadastra a ONU no IXC.
+18. Bot cadastra a ONU e executa a autorizacao pela API.
+19. Depois da autorizacao, cria o atendimento de assunto 7; o workflow gera a OS.
+20. Bot finaliza a OS com resposta 5 e diagnostico 507, marca `Finaliza atendimento` e salva.
 
 ## Configuracao
 
@@ -64,6 +66,10 @@ Base oficial: `https://SEU_DOMINIO/webservice/v1/{tabela}`.
 | Login PPPoE | `radusuarios` | Buscar login vinculado ao contrato |
 | Scripts/perfis | `radpop_radio_cliente_fibra_perfil` | Listar scripts conforme a OLT; OLT 01/02 PMS exibem apenas bridge e integrada correspondentes, e Huawei exibe apenas os perfis exclusivos bridge e integrada |
 | Cadastro/provisionamento da ONU | `radpop_radio_cliente_fibra` | Criar a ONU com OLT, caixa, porta, contrato, login e perfil |
+| Autorizacao na OLT | `fh_onu_nao_autorizadas_22396` | Autorizar pela API usando o ID original da ONU pendente |
+| Atendimento de provisionamento | `su_ticket` | Criar atendimento com assunto 7 e processo 71 |
+| Ordem de servico | `su_oss_chamado` | Localizar a OS gerada pelo workflow do atendimento |
+| Finalizacao da OS | `su_oss_chamado_fechar` | Executar Acoes > Finalizar, resposta 5, diagnostico 507 e `finaliza_processo=S` |
 | Ativacao de contrato | `cliente_contrato_ativar_cliente` | Tentar ativar contrato em instalacao e titularidade somente quando o contrato ainda nao estiver ativo |
 | Limpeza de MAC | `radusuarios_25452` | Limpar MAC do login na troca de equipamento e do login antigo na troca de titularidade |
 

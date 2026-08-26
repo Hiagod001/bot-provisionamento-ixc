@@ -14,6 +14,7 @@ import {
   buildProvisionSuccessMessage,
   buildSummary,
   buildTitularitySuccessMessage,
+  contractAddress,
   formatAuthorizedOnu,
   formatContract,
   formatLogin,
@@ -714,6 +715,29 @@ export const registerFlow = (bot, ixc, config) => {
       await activateContractWithWarning(ctx, state, ixc);
       const result = await ixc.provisionOnu(payload);
       await ctx.reply(buildProvisionSuccessMessage(state, result.provisionedOnu));
+      if (config.ixc.os.enabled) {
+        try {
+          const osResult = await ixc.createAndCloseProvisioningOs({
+            client: state.client,
+            contract: state.contract,
+            login: state.login,
+            box: state.box?.descricao || state.box?.id,
+            port: state.dropPort,
+            serial: result.provisionedOnu?.mac || state.onu?.mac || state.onu?.Chassi,
+            address: contractAddress(state.contract, state.client),
+          });
+          if (osResult) {
+            await ctx.reply(
+              `Atendimento ${osResult.ticket.id} e OS ${osResult.serviceOrder.id} finalizados.`
+            );
+          }
+        } catch (osError) {
+          console.error('ONU provisionada, mas a OS nao foi concluida:', osError);
+          await ctx.reply(
+            `ONU provisionada, mas confira a OS no IXC: ${String(osError?.message || osError)}`
+          );
+        }
+      }
       if (state.contractActivationWarning) {
         await ctx.reply(`Aviso: confira a ativacao. ${state.contractActivationWarning}`);
       }

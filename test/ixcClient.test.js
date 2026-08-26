@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { deriveProvisionNetworkFields, selectProfilesForOlt } from '../src/ixcClient.js';
+import {
+  IxcClient,
+  buildProvisionOsMessage,
+  deriveProvisionNetworkFields,
+  selectProfilesForOlt,
+} from '../src/ixcClient.js';
 
 const profiles = [
   { id: '87', nome: '(TESTE) ONU-BRIDGE-OLT01.PMS', fabricante_modelo: '' },
@@ -70,4 +75,57 @@ test('nao aceita provisionamento sem uma VLAN conhecida para a interface', () =>
       }),
     /Nao encontrei uma VLAN valida/
   );
+});
+
+test('mensagem da OS leva caixa, porta e serial escolhidos no bot', () => {
+  const message = buildProvisionOsMessage({ box: 'PMS-01', port: '8', serial: 'ABC1234' });
+  assert.match(message, /Caixa: PMS-01/);
+  assert.match(message, /Porta: 8/);
+  assert.match(message, /ONU: ABC1234/);
+});
+
+test('fechamento da OS marca finalizar atendimento no payload nativo', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.os = {
+    enabled: true,
+    subjectId: '7',
+    sectorId: '3',
+    processId: '71',
+    taskId: '677',
+    responseId: '5',
+    diagnosisId: '507',
+    technicianId: '367',
+  };
+
+  let closeCall;
+  client.create = async (resource, payload) => {
+    if (resource === 'su_ticket') return { id: '100' };
+    closeCall = { resource, payload };
+    return { type: 'success' };
+  };
+  client.read = async () => ({
+    id: '100',
+    id_wfl_processo: '71',
+    id_responsavel_tecnico: '367',
+  });
+  client.waitForTicketOs = async () => ({ id: '200', id_wfl_tarefa: '677', id_tecnico: '367' });
+
+  const result = await client.createAndCloseProvisioningOs({
+    client: { id: '10', id_filial: '1' },
+    contract: { id: '20', id_filial: '1' },
+    login: { id: '30' },
+    box: 'CX-01',
+    port: '4',
+    serial: 'SERIAL1',
+    address: 'Rua Teste, 1',
+  });
+
+  assert.equal(result.ticket.id, '100');
+  assert.equal(result.serviceOrder.id, '200');
+  assert.equal(closeCall.resource, 'su_oss_chamado_fechar');
+  assert.equal(closeCall.payload.id_chamado, '200');
+  assert.equal(closeCall.payload.id_resposta, '5');
+  assert.equal(closeCall.payload.id_su_diagnostico, '507');
+  assert.equal(closeCall.payload.finaliza_processo, 'S');
+  assert.equal(closeCall.payload.status, 'F');
 });

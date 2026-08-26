@@ -160,6 +160,33 @@ const assertNotIxcError = (response, action) => {
   }
 };
 
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const formatIxcDateTime = (date = new Date()) =>
+  new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+    .format(date)
+    .replace(',', '');
+
+export const buildProvisionOsMessage = ({ box, port, serial }) =>
+  [
+    'Cabo: Nao informado',
+    `Caixa: ${box || 'Nao informada'}`,
+    `Porta: ${port || 'Nao informada'}`,
+    'Sinal Optico na Caixa: Nao informado',
+    'Sinal Optico no Cliente: Nao informado',
+    `ONU: ${serial || 'Nao informada'}`,
+    'Provisionado pelo bot Telegram.',
+  ].join('\r\n');
+
 const positiveInteger = (value) => {
   const number = Number.parseInt(value, 10);
   return Number.isFinite(number) && number > 0 ? number : null;
@@ -226,10 +253,20 @@ const distanceMeters = (from, to) => {
 };
 
 export class IxcClient {
-  constructor({ baseUrl, token, selfSigned = true, webEmail = '', webPassword = '' }) {
+  constructor({ baseUrl, token, selfSigned = true, webEmail = '', webPassword = '', os = {} }) {
     this.origin = new URL(baseUrl).origin;
     this.webEmail = webEmail;
     this.webPassword = webPassword;
+    this.os = {
+      enabled: os.enabled !== false,
+      subjectId: String(os.subjectId || '7'),
+      sectorId: String(os.sectorId || '3'),
+      processId: String(os.processId || '71'),
+      taskId: String(os.taskId || '677'),
+      responseId: String(os.responseId || '5'),
+      diagnosisId: String(os.diagnosisId || '507'),
+      technicianId: String(os.technicianId || ''),
+    };
     this.httpsAgent = new https.Agent({ rejectUnauthorized: !selfSigned });
     this.http = axios.create({
       baseURL: baseUrl,
@@ -729,6 +766,138 @@ export class IxcClient {
     return response.data;
   }
 
+  async authorizePendingOnu(pendingOnuId) {
+    if (!pendingOnuId) throw new Error('O IXC nao retornou o ID original da ONU pendente.');
+    const response = await this.actionPost('fh_onu_nao_autorizadas_22396', {
+      get_id: String(pendingOnuId),
+    });
+    assertNotIxcError(response, 'autorizar ONU pela API');
+    return response;
+  }
+
+  async findCreatedTicket({ createResponse, contractId, message }) {
+    const createdId = extractCreatedId(createResponse);
+    if (createdId) {
+      const ticket = await this.read('su_ticket', createdId);
+      if (ticket) return ticket;
+    }
+
+    const rows = await this.list('su_ticket', {
+      qtype: 'su_ticket.id_contrato',
+      query: String(contractId),
+      oper: '=',
+      rp: '20',
+      sortname: 'su_ticket.id',
+      sortorder: 'desc',
+    });
+    return (
+      rows.find(
+        (ticket) =>
+          String(ticket.id_assunto) === this.os.subjectId &&
+          String(ticket.menssagem || '').trim() === String(message).trim()
+      ) || null
+    );
+  }
+
+  async waitForTicketOs(ticketId) {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const rows = await this.list('su_oss_chamado', {
+        qtype: 'su_oss_chamado.id_ticket',
+        query: String(ticketId),
+        oper: '=',
+        rp: '10',
+        sortname: 'su_oss_chamado.id',
+        sortorder: 'desc',
+      });
+      if (rows[0]) return rows[0];
+      await wait(1000);
+    }
+    throw new Error(`Atendimento ${ticketId} criado, mas o IXC nao gerou a OS.`);
+  }
+
+  async createAndCloseProvisioningOs({ client, contract, login, box, port, serial, address }) {
+    if (!this.os.enabled) return null;
+
+    const message = buildProvisionOsMessage({ box, port, serial });
+    const technicianId = this.os.technicianId;
+    const ticketPayload = {
+      tipo: 'C',
+      id_cliente: String(client.id),
+      id_assunto: this.os.subjectId,
+      titulo: 'Provisionamento',
+      status: 'P',
+      su_status: 'N',
+      prioridade: 'M',
+      id_ticket_setor: this.os.sectorId,
+      id_ticket_origem: 'I',
+      id_wfl_processo: this.os.processId,
+      id_su_diagnostico: '0',
+      origem_endereco: 'L',
+      menssagem: message,
+      endereco: String(address || ''),
+      id_filial: String(contract.id_filial || client.id_filial || '1'),
+      id_login: String(login.id),
+      id_contrato: String(contract.id),
+      origem_cadastro: 'P',
+      ...(technicianId
+        ? { id_usuarios: technicianId, id_responsavel_tecnico: technicianId }
+        : {}),
+    };
+
+    const createResponse = await this.create('su_ticket', ticketPayload);
+    assertNotIxcError(createResponse, 'abrir atendimento de provisionamento');
+    const ticket = await this.findCreatedTicket({
+      createResponse,
+      contractId: contract.id,
+      message,
+    });
+    if (!ticket?.id) throw new Error('Atendimento criado, mas o IXC nao retornou seu ID.');
+
+    const serviceOrder = await this.waitForTicketOs(ticket.id);
+    const closedAt = formatIxcDateTime();
+    const responsibleId = technicianId || serviceOrder.id_tecnico || ticket.id_responsavel_tecnico;
+    if (!responsibleId || String(responsibleId) === '0') {
+      throw new Error(
+        `OS ${serviceOrder.id} criada, mas falta configurar IXC_OS_TECHNICIAN_ID para finaliza-la.`
+      );
+    }
+
+    const closeResponse = await this.create('su_oss_chamado_fechar', {
+      id_chamado: String(serviceOrder.id),
+      id_tarefa_atual: String(serviceOrder.id_wfl_tarefa || this.os.taskId),
+      eh_tarefa_decisao: 'S',
+      sequencia_atual: '1',
+      proxima_sequencia_forcada: '2',
+      finaliza_processo_aux: 'S',
+      gera_comissao_aux: 'ROS',
+      id_processo: String(ticket.id_wfl_processo || this.os.processId),
+      data_inicio: closedAt,
+      data_final: closedAt,
+      id_resposta: this.os.responseId,
+      mensagem: message,
+      id_tecnico: String(responsibleId),
+      id_equipe: '',
+      gera_comissao: 'S',
+      status: 'F',
+      data: '',
+      id_evento: '',
+      id_su_diagnostico: this.os.diagnosisId,
+      id_diagnostico_especifico: '',
+      justificativa_sla_atrasado: '',
+      id_evento_status: '',
+      finaliza_processo: 'S',
+      id_proxima_tarefa: '',
+      id_proxima_tarefa_aux: '',
+      latitude: '',
+      longitude: '',
+      gps_time: '',
+      historico: '',
+    });
+    assertNotIxcError(closeResponse, `finalizar OS ${serviceOrder.id}`);
+
+    return { ticket, serviceOrder, closeResponse };
+  }
+
   async provisionOnu(payload) {
     const prepared = await this.prepareProvisionPayload(payload);
     const duplicates = await this.findFiberClientsByMac(prepared.clienteFibra.mac);
@@ -737,12 +906,6 @@ export class IxcClient {
         `Ja existe cadastro de fibra para esta ONU (ID ${duplicates[0].id}, contrato ${duplicates[0].id_contrato || '-'}). Remova ou transfira o cadastro antigo antes de instalar.`
       );
     }
-    if (!this.webEmail || !this.webPassword) {
-      throw new Error(
-        'Falta configurar a conta web do IXC para executar o botao Autorizar ONU. Nada foi gravado.'
-      );
-    }
-
     const createResponse = await this.create('radpop_radio_cliente_fibra', prepared.clienteFibra);
     assertNotIxcError(createResponse, 'provisionar ONU');
 
@@ -754,7 +917,7 @@ export class IxcClient {
     });
     if (!provisionedOnu?.id) throw new Error('Cadastro salvo, mas o IXC nao retornou o ID da ONU.');
 
-    await this.authorizeOnu(provisionedOnu.id);
+    await this.authorizePendingOnu(prepared.pendingOnuId);
     const confirmed = await this.read('radpop_radio_cliente_fibra', provisionedOnu.id);
 
     return {
