@@ -102,6 +102,28 @@ const identifyPmsOlt = (olt, onu) => {
   return null;
 };
 
+const identifyLocationProfile = (olt, onu) => {
+  const name = compactName(
+    [olt?.descricao, olt?.olt_nome, olt?.nome, onu?.olt_nome].filter(Boolean).join(' ')
+  );
+  const locations = [
+    { code: 'PTC', aliases: ['PTC', 'PARACATU'] },
+    { code: 'CRZ', aliases: ['CRZ', 'CRUZEIRODAFORTALEZA'] },
+    { code: 'BRJ', aliases: ['BRJ', 'BREJOBONITO'] },
+    { code: 'SGA', aliases: ['SGA', 'SAOGONCALODOABAETE'] },
+  ];
+  return locations.find((location) => location.aliases.some((alias) => name.includes(alias)))?.code;
+};
+
+const profilesForLocation = (rows, code) =>
+  rows.filter((profile) => {
+    const name = compactName(profile.nome);
+    return (
+      name.endsWith(`ONUBRIDGE${code}`) ||
+      name.endsWith(`ONUINTEGRADA${code}`)
+    );
+  });
+
 export const selectProfilesForOlt = (rows, olt, onu = null) => {
   const pmsOlt = identifyPmsOlt(olt, onu);
   if (pmsOlt) {
@@ -112,6 +134,12 @@ export const selectProfilesForOlt = (rows, olt, onu = null) => {
         name.endsWith(`ONUINTEGRADAOLT${pmsOlt}PMS`)
       );
     });
+  }
+
+  const locationProfile = identifyLocationProfile(olt, onu);
+  if (locationProfile) {
+    const matched = profilesForLocation(rows, locationProfile);
+    if (matched.length) return matched;
   }
 
   const oltAliases = [
@@ -129,6 +157,8 @@ export const selectProfilesForOlt = (rows, olt, onu = null) => {
     return rows.filter((profile) => {
       const name = compactName(profile.nome);
       return (
+        name.endsWith('ONUBRIDGEOLTHUAWEI') ||
+        name.endsWith('ONUINTEGRADAOLTHUAWEI') ||
         name.includes('HBRIDGEAPENASOLTHUAWEI') ||
         name.includes('HINTEGRADAAPENASOLTHUAWEI')
       );
@@ -156,9 +186,21 @@ const extractCreatedId = (response) => {
 
 const assertNotIxcError = (response, action) => {
   const message = typeof response === 'string' ? response : response?.message;
-  if (response?.type === 'error' || /^\s*(erro|falha)\b/i.test(String(message || ''))) {
+  const text = String(message || '');
+  if (
+    response?.type === 'error' ||
+    /^\s*(erro|falha)\b/i.test(text) ||
+    /panel-danger/i.test(text)
+  ) {
     throw new Error(`IXC retornou erro ao ${action}: ${message || 'erro sem mensagem'}`);
   }
+};
+
+const isMissingOnuDeviceResponse = (response) => {
+  const message = typeof response === 'string' ? response : response?.message;
+  return /(registro|onu|dispositivo)\s+n[aã]o\s+(foi\s+)?encontrad[oa]|n[aã]o\s+existe|not\s+found/i.test(
+    String(message || '')
+  );
 };
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -177,15 +219,62 @@ const formatIxcDateTime = (date = new Date()) =>
     .format(date)
     .replace(',', '');
 
-export const buildProvisionOsMessage = ({ box, port, serial }) =>
+const decodeHtmlText = (value) =>
+  String(value || '')
+    .replace(/<br\b[^>]*>|<\/(?:div|p|tr)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number.parseInt(code, 10)))
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s+/g, '\n')
+    .trim();
+
+const powerValue = (text, label) => {
+  const match = text.match(new RegExp(`(?:^|\\n)${label}\\s*:\\s*([+-]?\\d+(?:[.,]\\d+)?)`, 'im'));
+  return match ? match[1].replace(',', '.') : '';
+};
+
+export const parseOnuPowerSummary = (response) => {
+  const text = decodeHtmlText(typeof response === 'string' ? response : response?.message || response);
+  const summary = {
+    // Neste relatorio Huawei do IXC, "Tx olt" representa o TX da ONU.
+    onuTxDbm: powerValue(text, 'SEND POWER') || powerValue(text, 'Tx olt'),
+    onuRxDbm: powerValue(text, 'RECV POWER') || powerValue(text, 'Sinal Rx'),
+    oltRxDbm: powerValue(text, 'OLT RECV POWER') || powerValue(text, 'Rx olt') || powerValue(text, 'Sinal Tx'),
+    status: text.match(/Status pot[eê]ncia\s*:\s*([^\n<]+)/i)?.[1]?.trim() || '',
+  };
+
+  if (!summary.onuRxDbm && !summary.onuTxDbm && !summary.oltRxDbm) {
+    throw new Error('O IXC nao retornou os valores de potencia da ONU.');
+  }
+  return summary;
+};
+
+export const buildProvisionOsMessage = ({ box, port, serial, signal = {} }) =>
   [
     'Cabo: Nao informado',
     `Caixa: ${box || 'Nao informada'}`,
     `Porta: ${port || 'Nao informada'}`,
-    'Sinal Optico na Caixa: Nao informado',
-    'Sinal Optico no Cliente: Nao informado',
+    `Sinal da ONU recebido na OLT (RX): ${signal.oltRxDbm ? `${signal.oltRxDbm} dBm` : 'Nao informado'}`,
+    `Sinal Optico no Cliente: ${[
+      signal.onuRxDbm ? `ONU RX ${signal.onuRxDbm} dBm` : '',
+      signal.onuTxDbm ? `ONU TX ${signal.onuTxDbm} dBm` : '',
+      signal.status ? `Status ${signal.status}` : '',
+    ].filter(Boolean).join(' | ') || 'Nao informado'}`,
     `ONU: ${serial || 'Nao informada'}`,
     'Provisionado pelo bot Telegram.',
+  ].join('\r\n');
+
+export const buildRouterReplacementOsMessage = () =>
+  [
+    'Troca de roteador realizada.',
+    'MAC do login PPPoE limpo no IXC.',
+    'Atendimento executado pelo bot Telegram.',
   ].join('\r\n');
 
 const positiveInteger = (value) => {
@@ -251,6 +340,12 @@ const distanceMeters = (from, to) => {
     Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
 
   return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+};
+
+const isBoxAvailableForLocation = (box) => {
+  if (box?.status === 'A') return true;
+  const description = String(box?.descricao || box?.nome || '').trim();
+  return /^VRJ(?:\s*-|\s|$)/i.test(description);
 };
 
 export class IxcClient {
@@ -419,7 +514,7 @@ export class IxcClient {
     return rows
       .map(normalizePendingOnu)
       .filter((onu) => {
-        const haystack = [onu.mac, onu.Chassi, onu.ponid, onu.modelo]
+        const haystack = [onu.mac, onu.Chassi]
           .filter(Boolean)
           .join(' ')
           .toUpperCase();
@@ -430,39 +525,19 @@ export class IxcClient {
   async findAuthorizedOnusBySerialSuffix(serialSuffix) {
     const suffix = String(serialSuffix).trim();
     const suffixUpper = suffix.toUpperCase();
-    const huaweiHexCandidates =
-      suffixUpper.length === 7
-        ? '0123456789ABCDEF'.split('').map((nibble) => `48575443${nibble}${suffixUpper}`)
-        : [];
-    const exactCandidates = [
-      suffix,
-      suffixUpper,
-      suffix.toLowerCase(),
-      ...huaweiHexCandidates,
-    ];
-    const exactResults = await Promise.all(
-      [...new Set(exactCandidates)].map((candidate) =>
-        this.list('radpop_radio_cliente_fibra', {
-          qtype: 'radpop_radio_cliente_fibra.mac',
-          query: candidate,
-          oper: '=',
-          rp: '20',
-          sortname: 'radpop_radio_cliente_fibra.id',
-          sortorder: 'desc',
-        })
-      )
-    );
-    const queriedRows = exactResults.flat();
-
-    const exactRows = [...new Map(queriedRows.map((row) => [String(row.id), row])).values()].filter((onu) => {
-      const haystack = [onu.mac, onu.nome, onu.ponid, onu.onu_tipo]
-        .filter(Boolean)
-        .join(' ')
-        .toUpperCase();
-      return haystack.includes(suffix.toUpperCase());
+    const partialRows = await this.list('radpop_radio_cliente_fibra', {
+      qtype: 'radpop_radio_cliente_fibra.mac',
+      query: suffix,
+      oper: 'L',
+      rp: '200',
+      sortname: 'radpop_radio_cliente_fibra.id',
+      sortorder: 'desc',
     });
+    const partialMatches = partialRows.filter((onu) =>
+      String(onu.mac || '').toUpperCase().includes(suffixUpper)
+    );
 
-    if (exactRows.length) return exactRows;
+    if (partialMatches.length) return partialMatches;
 
     const foundRows = [];
     const pageSize = 500;
@@ -475,30 +550,59 @@ export class IxcClient {
       });
 
       const matches = rows.filter((onu) => {
-        const haystack = [onu.mac, onu.nome, onu.ponid, onu.onu_tipo]
-          .filter(Boolean)
-          .join(' ')
-          .toUpperCase();
-        return haystack.includes(suffixUpper);
+        return String(onu.mac || '').toUpperCase().includes(suffixUpper);
       });
 
       foundRows.push(...matches);
-      if (foundRows.length || rows.length < pageSize) break;
+      if (rows.length < pageSize) break;
     }
 
     return [...new Map(foundRows.map((row) => [String(row.id), row])).values()];
   }
 
   async removeAuthorizedOnu(onuId) {
-    const response = await this.delete('radpop_radio_cliente_fibra', onuId);
-    assertNotIxcError(response, 'remover cadastro antigo da ONU');
-    return response;
+    const deviceResponse = await this.actionPost('botao_excluir_dispositivo_22434', {
+      id: String(onuId),
+    });
+    assertNotIxcError(deviceResponse, 'desautorizar ONU no dispositivo');
+
+    const deleteResponse = await this.delete('radpop_radio_cliente_fibra', onuId);
+    assertNotIxcError(deleteResponse, 'remover cadastro antigo da ONU');
+    return { deviceResponse, deleteResponse };
+  }
+
+  async removeDuplicateFiberClient(onuId) {
+    let deviceResponse;
+    try {
+      deviceResponse = await this.actionPost('botao_excluir_dispositivo_22434', {
+        id: String(onuId),
+      });
+      assertNotIxcError(deviceResponse, 'desautorizar cadastro duplicado da ONU');
+    } catch (error) {
+      if (!isMissingOnuDeviceResponse(deviceResponse)) throw error;
+      console.warn(`ONU do cadastro antigo ${onuId} ja nao existe na OLT; removendo cadastro orfao.`);
+    }
+
+    const deleteResponse = await this.delete('radpop_radio_cliente_fibra', onuId);
+    assertNotIxcError(deleteResponse, 'excluir cadastro duplicado da ONU');
+    return { deviceResponse, deleteResponse };
   }
 
   async findFiberClientsByContract(contractId) {
     return this.list('radpop_radio_cliente_fibra', {
       qtype: 'radpop_radio_cliente_fibra.id_contrato',
       query: String(contractId),
+      oper: '=',
+      rp: '20',
+      sortname: 'radpop_radio_cliente_fibra.id',
+      sortorder: 'desc',
+    });
+  }
+
+  async findFiberClientsByLogin(loginId) {
+    return this.list('radpop_radio_cliente_fibra', {
+      qtype: 'radpop_radio_cliente_fibra.id_login',
+      query: String(loginId),
       oper: '=',
       rp: '20',
       sortname: 'radpop_radio_cliente_fibra.id',
@@ -520,7 +624,15 @@ export class IxcClient {
   }
 
   async transferFiberClient(fiberId, patch) {
-    const response = await this.update('radpop_radio_cliente_fibra', fiberId, patch);
+    const current = await this.read('radpop_radio_cliente_fibra', fiberId);
+    if (!current) {
+      throw new Error(`Cadastro de fibra ${fiberId} nao encontrado para transferir titularidade.`);
+    }
+
+    const response = await this.update('radpop_radio_cliente_fibra', fiberId, {
+      ...current,
+      ...patch,
+    });
     assertNotIxcError(response, 'transferir titularidade do cadastro de fibra');
     return response;
   }
@@ -560,7 +672,7 @@ export class IxcClient {
           distanceMeters: Math.round(distanceMeters(origin, { latitude, longitude })),
         };
       })
-      .filter((box) => box && box.status === 'A' && box.distanceMeters <= radiusMeters)
+      .filter((box) => box && isBoxAvailableForLocation(box) && box.distanceMeters <= radiusMeters)
       .sort((a, b) => a.distanceMeters - b.distanceMeters)
       .slice(0, limit);
   }
@@ -649,6 +761,123 @@ export class IxcClient {
       rp: '20',
       sortname: 'radusuarios.id',
       sortorder: 'desc',
+    });
+  }
+
+  async findPppoeLoginsByClient(clientId) {
+    return this.list('radusuarios', {
+      qtype: 'radusuarios.id_cliente',
+      query: String(clientId),
+      oper: '=',
+      rp: '100',
+      sortname: 'radusuarios.id',
+      sortorder: 'desc',
+    });
+  }
+
+  async findFiberClientsByClient(clientId) {
+    const [logins, contracts] = await Promise.all([
+      this.findPppoeLoginsByClient(clientId),
+      this.findContractsByClient(clientId),
+    ]);
+    const groups = await Promise.all([
+      ...logins.map((login) => this.findFiberClientsByLogin(login.id)),
+      ...contracts.map((contract) => this.findFiberClientsByContract(contract.id)),
+    ]);
+    return [...new Map(groups.flat().map((fiber) => [String(fiber.id), fiber])).values()];
+  }
+
+  async findFiberClientsForContract(contractId) {
+    const [directFibers, logins] = await Promise.all([
+      this.findFiberClientsByContract(contractId),
+      this.findPppoeLoginsByContract(contractId),
+    ]);
+    const loginFibers = await Promise.all(
+      logins.map((login) => this.findFiberClientsByLogin(login.id))
+    );
+    return [
+      ...new Map(
+        [...directFibers, ...loginFibers.flat()].map((fiber) => [String(fiber.id), fiber])
+      ).values(),
+    ];
+  }
+
+  async findFiberClientsByBox(boxId) {
+    const rows = await this.list('radpop_radio_cliente_fibra', {
+      qtype: 'radpop_radio_cliente_fibra.id_caixa_ftth',
+      query: String(boxId),
+      oper: '=',
+      rp: '500',
+      sortname: 'radpop_radio_cliente_fibra.porta_ftth',
+      sortorder: 'asc',
+    });
+    return rows.sort((a, b) =>
+      Number.parseInt(a.porta_ftth || '0', 10) - Number.parseInt(b.porta_ftth || '0', 10)
+    );
+  }
+
+  async enrichFiberBoxNames(fibers) {
+    const rows = Array.isArray(fibers) ? fibers : [];
+    const boxIds = [...new Set(
+      rows
+        .map((fiber) => fiber.id_caixa_ftth)
+        .filter((id) => id && String(id) !== '0')
+        .map(String)
+    )];
+    const boxResults = await Promise.allSettled(
+      boxIds.map((id) => this.read('rad_caixa_ftth', id))
+    );
+    const boxNames = new Map();
+    boxResults.forEach((result, index) => {
+      if (result.status !== 'fulfilled' || !result.value) return;
+      const name = result.value.descricao || result.value.nome;
+      if (name) boxNames.set(boxIds[index], name);
+    });
+
+    return rows.map((fiber) => ({
+      ...fiber,
+      caixa_nome: fiber.caixa_nome || boxNames.get(String(fiber.id_caixa_ftth)) || '',
+    }));
+  }
+
+  async enrichFiberClientNames(fibers) {
+    const rows = Array.isArray(fibers) ? fibers : [];
+    const loginIds = [...new Set(
+      rows.map((fiber) => fiber.id_login).filter((id) => id && String(id) !== '0').map(String)
+    )];
+    const loginResults = await Promise.allSettled(
+      loginIds.map((id) => this.read('radusuarios', id))
+    );
+    const logins = new Map();
+    loginResults.forEach((result, index) => {
+      if (result.status === 'fulfilled' && result.value) {
+        logins.set(loginIds[index], result.value);
+      }
+    });
+
+    const clientIds = [...new Set(
+      [...logins.values()]
+        .map((login) => login.id_cliente)
+        .filter((id) => id && String(id) !== '0')
+        .map(String)
+    )];
+    const clientResults = await Promise.allSettled(
+      clientIds.map((id) => this.findClient(id))
+    );
+    const clients = new Map();
+    clientResults.forEach((result, index) => {
+      if (result.status === 'fulfilled' && result.value) {
+        clients.set(clientIds[index], result.value);
+      }
+    });
+
+    return rows.map((fiber) => {
+      const login = logins.get(String(fiber.id_login));
+      const client = login ? clients.get(String(login.id_cliente)) : null;
+      return {
+        ...fiber,
+        nome: client?.razao || login?.login || fiber.nome,
+      };
     });
   }
 
@@ -744,6 +973,55 @@ export class IxcClient {
     return response;
   }
 
+  async getOnuPowerSummary(fiberId, { attempts = 3, delayMs = 4000 } = {}) {
+    let lastError;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await this.actionPost('botao_rel_22991', {
+          id: String(fiberId),
+        });
+        assertNotIxcError(response, 'consultar Potencia/Resumo ONU');
+        return parseOnuPowerSummary(response);
+      } catch (error) {
+        lastError = error;
+        if (attempt < attempts) await wait(delayMs);
+      }
+    }
+    throw lastError;
+  }
+
+  async getFiberPowerReports(fibers, { concurrency = 4 } = {}) {
+    const rows = Array.isArray(fibers) ? fibers : [];
+    const reports = new Array(rows.length);
+    let nextIndex = 0;
+
+    const worker = async () => {
+      while (nextIndex < rows.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        const fiber = rows[index];
+        try {
+          reports[index] = {
+            fiber,
+            signal: await this.getOnuPowerSummary(fiber.id, { attempts: 1 }),
+            status: 'Online',
+          };
+        } catch (error) {
+          const message = String(error?.message || '');
+          reports[index] = {
+            fiber,
+            signal: null,
+            status: /ONU Offline|unactive|offline/i.test(message) ? 'Offline' : 'Sem leitura',
+          };
+        }
+      }
+    };
+
+    const workerCount = Math.min(Math.max(1, concurrency), rows.length);
+    await Promise.all(Array.from({ length: workerCount }, worker));
+    return reports;
+  }
+
   async findCreatedTicket({ createResponse, contractId, message }) {
     const createdId = extractCreatedId(createResponse);
     if (createdId) {
@@ -784,16 +1062,21 @@ export class IxcClient {
     throw new Error(`Atendimento ${ticketId} criado, mas o IXC nao gerou a OS.`);
   }
 
-  async createAndCloseProvisioningOs({ client, contract, login, box, port, serial, address }) {
+  async createAndCloseServiceOs({
+    client,
+    contract,
+    login,
+    address,
+    message,
+    title,
+  }) {
     if (!this.os.enabled) return null;
-
-    const message = buildProvisionOsMessage({ box, port, serial });
     const technicianId = this.os.technicianId;
     const ticketPayload = {
       tipo: 'C',
       id_cliente: String(client.id),
       id_assunto: this.os.subjectId,
-      titulo: 'Provisionamento',
+      titulo: String(title),
       status: 'P',
       su_status: 'N',
       prioridade: 'M',
@@ -867,14 +1150,75 @@ export class IxcClient {
     return { ticket, serviceOrder, closeResponse };
   }
 
+  async createAndCloseProvisioningOs({
+    client,
+    contract,
+    login,
+    fiberId,
+    box,
+    port,
+    serial,
+    address,
+    signal: suppliedSignal,
+  }) {
+    if (!this.os.enabled) return null;
+
+    if (!fiberId) throw new Error('Cadastro de fibra sem ID para consultar a potencia da ONU.');
+    const signal = suppliedSignal || await this.getOnuPowerSummary(fiberId);
+    const message = buildProvisionOsMessage({ box, port, serial, signal });
+    const result = await this.createAndCloseServiceOs({
+      client,
+      contract,
+      login,
+      address,
+      message,
+      title: 'Provisionamento',
+    });
+    return result ? { ...result, signal } : null;
+  }
+
+  async createAndCloseRouterReplacementOs({ client, contract, login, address }) {
+    return this.createAndCloseServiceOs({
+      client,
+      contract,
+      login,
+      address,
+      message: buildRouterReplacementOsMessage(),
+      title: 'Troca de roteador',
+    });
+  }
+
   async provisionOnu(payload) {
     const prepared = await this.prepareProvisionPayload(payload);
     await this.ensureOnuAuthorizationApiAvailable();
-    const duplicates = await this.findFiberClientsByMac(prepared.clienteFibra.mac);
-    if (duplicates.length) {
-      throw new Error(
-        `Ja existe cadastro de fibra para esta ONU (ID ${duplicates[0].id}, contrato ${duplicates[0].id_contrato || '-'}). Remova ou transfira o cadastro antigo antes de instalar.`
+    const [macDuplicates, loginDuplicates] = await Promise.all([
+      this.findFiberClientsByMac(prepared.clienteFibra.mac),
+      prepared.cleanupExistingLogin
+        ? this.findFiberClientsByLogin(prepared.clienteFibra.id_login)
+        : Promise.resolve([]),
+    ]);
+    const duplicates = [
+      ...new Map(
+        [...macDuplicates, ...loginDuplicates].map((duplicate) => [String(duplicate.id), duplicate])
+      ).values(),
+    ];
+    for (const duplicate of duplicates) {
+      console.log(
+        `Removendo cadastro de fibra antigo ${duplicate.id} antes do novo provisionamento.`
       );
+      await this.removeDuplicateFiberClient(duplicate.id);
+    }
+    if (duplicates.length) {
+      const [remainingByMac, remainingByLogin] = await Promise.all([
+        this.findFiberClientsByMac(prepared.clienteFibra.mac),
+        prepared.cleanupExistingLogin
+          ? this.findFiberClientsByLogin(prepared.clienteFibra.id_login)
+          : Promise.resolve([]),
+      ]);
+      const remainingDuplicates = [...remainingByMac, ...remainingByLogin];
+      if (remainingDuplicates.length) {
+        throw new Error('O cadastro antigo da ONU permaneceu no IXC apos a tentativa de limpeza.');
+      }
     }
     const createResponse = await this.create('radpop_radio_cliente_fibra', prepared.clienteFibra);
     assertNotIxcError(createResponse, 'provisionar ONU');

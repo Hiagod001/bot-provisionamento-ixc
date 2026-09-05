@@ -1,29 +1,41 @@
 # Bot Telegram de Provisionamento IXC
 
+O menu inicial tambem oferece **Verificar sinal**:
+
+- **Sinal do cliente:** recebe o ID, permite escolher o contrato quando houver mais de um e consulta RX na ONU, TX da ONU e RX na OLT pelo relatorio `botao_rel_22991`.
+- **Sinal dos clientes de uma caixa:** recebe a localizacao, lista caixas em ate 300 metros e consulta RX/TX de todos os clientes da caixa escolhida.
+- A escolha de contrato mostra plano, status e endereco na mensagem; os botoes exibem apenas `Contrato 1`, `Contrato 2`, etc.
+- No relatorio por caixa, o nome do cliente e priorizado e o login e usado somente quando o cliente nao possui nome disponivel.
+- ONUs offline ou sem resposta da OLT aparecem de forma resumida, sem expor o retorno tecnico do IXC.
+
 Bot em Node.js para guiar o tecnico pelo provisionamento de ONU no IXC Provedor.
 
 ## Fluxo do tecnico
 
 1. Escolhe o tipo de servico: instalacao, mudanca de endereco, troca de equipamento ou troca de titularidade.
-2. Informa os 7 ultimos caracteres do serial da ONU.
+2. Informa no minimo 4 caracteres do serial e escolhe a ONU pelo serial completo.
 3. O bot executa a consulta equivalente ao botao `Consultar todas` e busca a ONU aguardando autorizacao no IXC.
-4. Em mudanca de endereco, se existir cadastro antigo dessa ONU em `radpop_radio_cliente_fibra`, o bot obriga remover o cadastro antigo antes de seguir.
-5. Em troca de equipamento, o bot busca o equipamento antigo pelo contrato escolhido, limpa o MAC do login, remove o cadastro antigo e reaproveita a mesma caixa/porta para a ONU nova.
-6. Em troca de titularidade, o bot busca a ONU ja provisionada, escolhe o novo cliente/contrato/login, tenta ativar o novo contrato, limpa o MAC do login antigo e transfere o cadastro de fibra para o novo titular.
-7. Tecnico envia a localizacao atual pelo Telegram quando o servico exigir nova caixa.
-8. Bot lista caixas ativas em ate 300 metros, ordenadas pela distancia.
-9. Tecnico escolhe a caixa correta no menu.
-10. Bot lista as portas livres da caixa.
-11. Tecnico escolhe a porta livre no menu.
-12. Tecnico informa ID do cliente.
-13. Bot lista os contratos do cliente com endereco/status.
-14. Tecnico escolhe o contrato correto.
-15. Bot busca o login PPPoE do contrato.
-16. Bot lista scripts/perfis de provisionamento conforme a OLT.
-17. Tecnico confirma, o bot valida se o contrato ja esta ativo e so chama a ativacao quando necessario.
-18. Bot cadastra a ONU e executa a autorizacao pela API.
-19. Depois da autorizacao, cria o atendimento de assunto 7; o workflow gera a OS.
-20. Bot finaliza a OS com resposta 5 e diagnostico 507, marca `Finaliza atendimento` e salva.
+4. Em mudanca de endereco, se existir cadastro antigo, o bot desautoriza a ONU na OLT, exclui o cliente fibra e consulta novamente a fila de ONUs nao autorizadas.
+5. O tecnico confirma a ONU pendente antes de enviar a localizacao e escolher caixa/porta.
+6. Em troca de equipamento, o bot busca o equipamento antigo pelo contrato escolhido. Se encontrar, limpa o MAC, remove o cadastro antigo e reaproveita caixa/porta. Se nao encontrar, segue como provisionamento novo e solicita localizacao, caixa e porta.
+7. Em troca de titularidade, o bot busca a ONU ja provisionada, escolhe o novo cliente/contrato/login, tenta ativar o novo contrato, limpa o MAC do login antigo e transfere o cadastro de fibra para o novo titular.
+8. Tecnico envia a localizacao atual pelo Telegram quando o servico exigir nova caixa.
+9. Bot lista caixas ativas em ate 300 metros, ordenadas pela distancia.
+10. Tecnico escolhe a caixa correta no menu.
+11. Bot lista as portas livres da caixa.
+12. Tecnico escolhe a porta livre no menu.
+13. Tecnico informa ID do cliente.
+14. Bot lista os contratos do cliente com endereco/status.
+15. Tecnico escolhe o contrato correto.
+16. Bot busca o login PPPoE do contrato e valida login/senha contra o CPF ou CNPJ do cliente. Se estiver fora do padrao, bloqueia o fluxo ate o NOC corrigir. Em mudanca de endereco, tambem limpa o MAC antes de provisionar.
+17. Bot lista scripts/perfis de provisionamento conforme a OLT.
+18. Tecnico confirma, o bot valida se o contrato ja esta ativo e so chama a ativacao quando necessario.
+19. Bot cadastra a ONU e executa a autorizacao pela API.
+20. Se encontrar outro cliente fibra com o mesmo serial/MAC, desautoriza e exclui o cadastro antigo silenciosamente antes de continuar. Na troca de equipamento, tambem procura pelo login PPPoE, inclusive registros orfaos com contrato zerado.
+21. Depois da autorizacao, consulta `Potencia/Resumo ONU` e captura RX/TX da ONU e RX recebido pela OLT.
+22. Em segundo plano, cria o atendimento de assunto 7; o workflow gera a OS com os sinais opticos.
+23. Bot finaliza a OS com resposta 5 e diagnostico 507, marca `Finaliza atendimento` e salva sem enviar detalhes administrativos ao tecnico.
+24. Na mensagem final, script integrado orienta configurar VLAN/PPPoE/senha na ONU; script bridge orienta configurar PPPoE/senha no roteador.
 
 ## Configuracao
 
@@ -67,6 +79,8 @@ Base oficial: `https://SEU_DOMINIO/webservice/v1/{tabela}`.
 | Scripts/perfis | `radpop_radio_cliente_fibra_perfil` | Listar scripts conforme a OLT; OLT 01/02 PMS exibem apenas bridge e integrada correspondentes, e Huawei exibe apenas os perfis exclusivos bridge e integrada |
 | Cadastro/provisionamento da ONU | `radpop_radio_cliente_fibra` | Criar a ONU com OLT, caixa, porta, contrato, login e perfil |
 | Autorizacao na OLT | `fh_onu_nao_autorizadas_22396` | Autorizar pela API usando o ID original da ONU pendente |
+| Gravar no dispositivo | `botao_gravar_dispositivo_22408` | Executar o botao `Autorizar ONU` usando o ID do cliente fibra |
+| Potencia/Resumo ONU | `botao_rel_22991` | Consultar RX/TX pelo ID do cliente fibra antes de abrir a OS |
 | Atendimento de provisionamento | `su_ticket` | Criar atendimento com assunto 7 e processo 71 |
 | Ordem de servico | `su_oss_chamado` | Localizar a OS gerada pelo workflow do atendimento |
 | Finalizacao da OS | `su_oss_chamado_fechar` | Executar Acoes > Finalizar, resposta 5, diagnostico 507 e `finaliza_processo=S` |

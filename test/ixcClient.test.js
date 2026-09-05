@@ -4,17 +4,120 @@ import assert from 'node:assert/strict';
 import {
   IxcClient,
   buildProvisionOsMessage,
+  buildRouterReplacementOsMessage,
   deriveProvisionNetworkFields,
+  parseOnuPowerSummary,
   selectProfilesForOlt,
 } from '../src/ixcClient.js';
+import {
+  findExistingTitularityProfile,
+  formatNearbyBoxLabel,
+  handleSwapAfterContractChoice,
+  completeRouterReplacement,
+  currentMenuCallbackValue,
+  normalizeSerialFragment,
+  parseMenuCallback,
+  registerFlow,
+  sendProvisionSignal,
+  selectTechnicianProfiles,
+  validatePppoeCredentials,
+} from '../src/flow.js';
+import {
+  buildProvisionSuccessMessage,
+  buildTitularitySuccessMessage,
+  formatAuthorizedOnu,
+  formatSignalReportEntry,
+} from '../src/format.js';
+import {
+  portsKeyboard,
+  routerReplacementKeyboard,
+  rowsKeyboard,
+  signalResultKeyboard,
+  swapEquipmentKeyboard,
+} from '../src/keyboards.js';
+
+const huaweiReport = `Potencia de ONU
+Sinal Rx: -21.48
+Temperatura: 48
+Voltagem: 3.260
+Sinal Tx: -26.58
+Status potencia: Regular
+INFORMACOES ADICIONAIS:
+Tx olt: 2.29
+Rx olt: -26.58`;
+
+test('Huawei interpreta os tres sinais sem inverter TX da ONU e RX da OLT', () => {
+  const signal = parseOnuPowerSummary(huaweiReport);
+  assert.deepEqual(signal, { onuTxDbm: '2.29', onuRxDbm: '-21.48', oltRxDbm: '-26.58', status: 'Regular' });
+  assert.equal(parseOnuPowerSummary(huaweiReport.replace('Rx olt: -26.58', '')).oltRxDbm, '-26.58');
+  assert.equal(parseOnuPowerSummary(huaweiReport.replace('Rx olt: -26.58', 'Rx olt: -25.00')).oltRxDbm, '-25.00');
+  const html = huaweiReport.replaceAll('\n', '<br />').replaceAll('.', ',');
+  assert.deepEqual(parseOnuPowerSummary(html), signal);
+  const partial = parseOnuPowerSummary('Sinal Rx: -21.48\nSinal Tx: -26.58');
+  assert.equal(partial.onuTxDbm, '');
+  assert.equal(partial.oltRxDbm, '-26.58');
+});
+
+test('Huawei usa a mesma leitura no relatorio de clientes e no final do provisionamento', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.actionPost = async () => huaweiReport;
+  const reports = await client.getFiberPowerReports([{ id: '1', nome: 'Cliente teste' }]);
+  assert.match(formatSignalReportEntry(reports[0]), /RX na OLT: -26.58 dBm/);
+  const messages = [];
+  const signal = await sendProvisionSignal({ reply: async (message) => messages.push(message) }, client, { id: '1' });
+  assert.match(messages[0], /TX da ONU: 2.29 dBm/);
+  assert.match(messages[0], /RX na ONU: -21.48 dBm/);
+  assert.match(messages[0], /RX na OLT: -26.58 dBm/);
+  assert.match(buildProvisionOsMessage({ signal }), /recebido na OLT \(RX\): -26.58 dBm/);
+});
+
+test('iniciar e navegar pelos menus preserva o historico de mensagens', async () => {
+  const commands = new Map();
+  const actions = [];
+  let start;
+  const bot = {
+    use() {},
+    start(handler) { start = handler; },
+    command(name, handler) { commands.set(name, handler); },
+    action(pattern, handler) { actions.push({ pattern, handler }); },
+    on() {},
+  };
+  registerFlow(bot, {}, { allowedTelegramIds: [] });
+  let deletions = 0;
+  const ctx = {
+    chat: { id: 'history-regression' },
+    message: { message_id: 100 },
+    reply: async () => {},
+    answerCbQuery: async () => {},
+    telegram: {
+      deleteMessages: async () => { deletions += 1; },
+      deleteMessage: async () => { deletions += 1; },
+    },
+  };
+  await start(ctx);
+  await commands.get('provisionar')(ctx);
+  await commands.get('sinal')(ctx);
+  for (const data of ['provision:start', 'signal:start', 'signal:again', 'signal:menu', 'signal:back']) {
+    ctx.callbackQuery = { data, message: { message_id: 100 } };
+    await actions.find(({ pattern }) => pattern.test(data)).handler(ctx);
+  }
+  assert.equal(deletions, 0);
+});
 
 const profiles = [
   { id: '87', nome: '(TESTE) ONU-BRIDGE-OLT01.PMS', fabricante_modelo: '' },
   { id: '86', nome: '(TESTE) ONU-INTEGRADA-OLT01.PMS', fabricante_modelo: '' },
-  { id: '85', nome: '(TESTE) ONU-BRIDGE-OLT02.PMS', fabricante_modelo: '' },
+  { id: '90', nome: '(TESTE) ONU-BRIDGE-OLT02.PMS', fabricante_modelo: '' },
   { id: '84', nome: '(TESTE) ONU-INTEGRADA-OLT02.PMS', fabricante_modelo: '' },
-  { id: '20', nome: 'H. BRIDGE -> APENAS OLT HUAWEI', fabricante_modelo: '' },
-  { id: '26', nome: 'H. INTEGRADA -> APENAS OLT HUAWEI', fabricante_modelo: '' },
+  { id: '20', nome: '(TESTE) ONU-BRIDGE-OLT HUAWEI', fabricante_modelo: '' },
+  { id: '94', nome: '(TESTE) ONU-INTEGRADA-OLT HUAWEI', fabricante_modelo: '' },
+  { id: '88', nome: '(TESTE) ONU-INTEGRADA-PTC', fabricante_modelo: '' },
+  { id: '89', nome: '(TESTE) ONU-BRIDGE-PTC', fabricante_modelo: '' },
+  { id: '91', nome: '(TESTE) ONU-INTEGRADA-CRZ', fabricante_modelo: '' },
+  { id: '92', nome: '(TESTE) ONU-BRIDGE-BRJ', fabricante_modelo: '' },
+  { id: '93', nome: '(TESTE) ONU-INTEGRADA-BRJ', fabricante_modelo: '' },
+  { id: '96', nome: '(TESTE) ONU-INTEGRADA-SGA', fabricante_modelo: '' },
+  { id: '97', nome: '(TESTE) ONU-BRIDGE-SGA', fabricante_modelo: '' },
   { id: '78', nome: 'H. INTEGRADA C/ VOIP --> APENAS OLT HUAWEI', fabricante_modelo: 'HW' },
   { id: '80', nome: 'INTEGRADA -> 04.pms OLT HUAWEI', fabricante_modelo: 'HW' },
   { id: '62', nome: 'FIBERHOME BRIDGE (inet)', fabricante_modelo: 'FBT' },
@@ -27,12 +130,12 @@ test('OLT 01 PMS mostra somente bridge e integrada da OLT 01', () => {
 
 test('OLT 02 PMS mostra somente bridge e integrada da OLT 02', () => {
   const selected = selectProfilesForOlt(profiles, { descricao: 'OLT - PMS - 02' });
-  assert.deepEqual(selected.map((profile) => profile.id), ['85', '84']);
+  assert.deepEqual(selected.map((profile) => profile.id), ['90', '84']);
 });
 
 test('OLT Huawei mostra somente bridge e integrada exclusivos', () => {
-  const selected = selectProfilesForOlt(profiles, { descricao: 'LT01 Paracatu (Huawei)' });
-  assert.deepEqual(selected.map((profile) => profile.id), ['20', '26']);
+  const selected = selectProfilesForOlt(profiles, { descricao: 'LT01 Lagoa Formosa (Huawei)' });
+  assert.deepEqual(selected.map((profile) => profile.id), ['20', '94']);
 });
 
 test('modelo Huawei da ONU nao transforma uma OLT FiberHome em Huawei', () => {
@@ -46,7 +149,26 @@ test('modelo Huawei da ONU nao transforma uma OLT FiberHome em Huawei', () => {
 
 test('fabricante Huawei por extenso tambem restringe o menu', () => {
   const selected = selectProfilesForOlt(profiles, { fabricante_modelo: 'HUAWEI' });
-  assert.deepEqual(selected.map((profile) => profile.id), ['20', '26']);
+  assert.deepEqual(selected.map((profile) => profile.id), ['20', '94']);
+});
+
+test('OLTs com perfil de localidade usam somente os scripts TESTE correspondentes', () => {
+  assert.deepEqual(
+    selectProfilesForOlt(profiles, { descricao: 'LT01 Paracatu (Huawei)' }).map((profile) => profile.id),
+    ['88', '89']
+  );
+  assert.deepEqual(
+    selectProfilesForOlt(profiles, { descricao: 'OLT BRJ' }).map((profile) => profile.id),
+    ['92', '93']
+  );
+  assert.deepEqual(
+    selectProfilesForOlt(profiles, { descricao: 'Sao Goncalo do Abaete' }).map((profile) => profile.id),
+    ['96', '97']
+  );
+  assert.deepEqual(
+    selectProfilesForOlt(profiles, { descricao: 'OLT CRZ' }).map((profile) => profile.id),
+    ['91']
+  );
 });
 
 test('calcula VLAN e proximo numero livre usando a mesma OLT, slot e PON', () => {
@@ -78,10 +200,86 @@ test('nao aceita provisionamento sem uma VLAN conhecida para a interface', () =>
 });
 
 test('mensagem da OS leva caixa, porta e serial escolhidos no bot', () => {
-  const message = buildProvisionOsMessage({ box: 'PMS-01', port: '8', serial: 'ABC1234' });
+  const message = buildProvisionOsMessage({
+    box: 'PMS-01',
+    port: '8',
+    serial: 'ABC1234',
+    signal: { onuRxDbm: '-17.72', onuTxDbm: '1.89', oltRxDbm: '-19.91', status: 'Regular' },
+  });
   assert.match(message, /Caixa: PMS-01/);
   assert.match(message, /Porta: 8/);
   assert.match(message, /ONU: ABC1234/);
+  assert.match(message, /Sinal da ONU recebido na OLT \(RX\): -19.91 dBm/);
+  assert.match(message, /ONU RX -17.72 dBm \| ONU TX 1.89 dBm \| Status Regular/);
+});
+
+test('menu de troca separa ONU de roteador e exige confirmacao do roteador', () => {
+  const equipmentLabels = swapEquipmentKeyboard().reply_markup.inline_keyboard
+    .flat()
+    .map((button) => [button.text, button.callback_data]);
+  const confirmationLabels = routerReplacementKeyboard().reply_markup.inline_keyboard
+    .flat()
+    .map((button) => [button.text, button.callback_data]);
+
+  assert.deepEqual(equipmentLabels, [
+    ['Trocar ONU', 'swapequipment:onu'],
+    ['Trocar roteador', 'swapequipment:router'],
+    ['Cancelar', 'confirm:no'],
+  ]);
+  assert.deepEqual(confirmationLabels, [
+    ['Confirmar troca do roteador', 'routerreplace:confirm'],
+    ['Cancelar', 'confirm:no'],
+  ]);
+});
+
+test('mensagem da OS de roteador informa troca e limpeza do MAC', () => {
+  const message = buildRouterReplacementOsMessage();
+  assert.match(message, /Troca de roteador realizada/);
+  assert.match(message, /MAC do login PPPoE limpo no IXC/);
+  assert.doesNotMatch(message, /ONU|Caixa|Porta/);
+});
+
+test('menus dinamicos incluem token e permitem identificar callbacks antigos', () => {
+  const token = 'abcdef123456';
+  const rows = rowsKeyboard('contract', [{ id: '10' }], (row) => row.id, token);
+  const ports = portsKeyboard([1, 2], token);
+
+  assert.equal(rows.reply_markup.inline_keyboard[0][0].callback_data, `contract:${token}:0`);
+  assert.equal(ports.reply_markup.inline_keyboard[0][1].callback_data, `port:${token}:2`);
+  assert.deepEqual(parseMenuCallback(`contract:${token}:0`, 'contract'), { token, value: 0 });
+  assert.equal(parseMenuCallback('contract:0', 'contract'), null);
+  assert.equal(
+    currentMenuCallbackValue(
+      { step: 'contract_choose', menuToken: '999999999999' },
+      'contract',
+      'contract_choose',
+      `contract:${token}:0`
+    ),
+    null
+  );
+  assert.equal(
+    currentMenuCallbackValue(
+      { step: 'contract_choose', menuToken: token },
+      'contract',
+      'contract_choose',
+      `contract:${token}:0`
+    ),
+    0
+  );
+});
+
+test('extrai RX e TX do HTML retornado por Potencia Resumo ONU', () => {
+  const result = parseOnuPowerSummary(
+    '<div>SEND POWER : 1.89 (Dbm)</div><div>RECV POWER : -17.72 (Dbm)</div>' +
+      '<div>OLT RECV POWER : -19.91 (Dbm)</div><div>Status pot&#xEA;ncia: Regular</div>'
+  );
+
+  assert.deepEqual(result, {
+    onuTxDbm: '1.89',
+    onuRxDbm: '-17.72',
+    oltRxDbm: '-19.91',
+    status: 'Regular',
+  });
 });
 
 test('fechamento da OS marca finalizar atendimento no payload nativo', async () => {
@@ -109,11 +307,18 @@ test('fechamento da OS marca finalizar atendimento no payload nativo', async () 
     id_responsavel_tecnico: '367',
   });
   client.waitForTicketOs = async () => ({ id: '200', id_wfl_tarefa: '677', id_tecnico: '367' });
+  client.getOnuPowerSummary = async () => ({
+    onuTxDbm: '1.50',
+    onuRxDbm: '-18.00',
+    oltRxDbm: '-20.00',
+    status: 'Regular',
+  });
 
   const result = await client.createAndCloseProvisioningOs({
     client: { id: '10', id_filial: '1' },
     contract: { id: '20', id_filial: '1' },
     login: { id: '30' },
+    fiberId: '40',
     box: 'CX-01',
     port: '4',
     serial: 'SERIAL1',
@@ -128,6 +333,274 @@ test('fechamento da OS marca finalizar atendimento no payload nativo', async () 
   assert.equal(closeCall.payload.id_su_diagnostico, '507');
   assert.equal(closeCall.payload.finaliza_processo, 'S');
   assert.equal(closeCall.payload.status, 'F');
+  assert.match(closeCall.payload.mensagem, /ONU RX -18.00 dBm/);
+});
+
+test('troca de roteador abre e finaliza OS especifica sem consultar ONU', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.os = {
+    enabled: true,
+    subjectId: '7',
+    sectorId: '3',
+    processId: '71',
+    taskId: '677',
+    responseId: '5',
+    diagnosisId: '507',
+    technicianId: '367',
+  };
+  const calls = [];
+  client.create = async (resource, payload) => {
+    calls.push({ resource, payload });
+    return resource === 'su_ticket' ? { id: '100' } : { type: 'success' };
+  };
+  client.read = async () => ({
+    id: '100',
+    id_wfl_processo: '71',
+    id_responsavel_tecnico: '367',
+  });
+  client.waitForTicketOs = async () => ({ id: '201', id_wfl_tarefa: '677', id_tecnico: '367' });
+  client.getOnuPowerSummary = async () => {
+    throw new Error('Nao deveria consultar ONU');
+  };
+
+  const result = await client.createAndCloseRouterReplacementOs({
+    client: { id: '10', id_filial: '1' },
+    contract: { id: '20', id_filial: '1' },
+    login: { id: '30' },
+    address: 'Rua Teste, 1',
+  });
+
+  assert.equal(result.serviceOrder.id, '201');
+  assert.equal(calls[0].resource, 'su_ticket');
+  assert.equal(calls[0].payload.titulo, 'Troca de roteador');
+  assert.match(calls[0].payload.menssagem, /Troca de roteador realizada/);
+  assert.equal(calls[1].resource, 'su_oss_chamado_fechar');
+  assert.match(calls[1].payload.mensagem, /MAC do login PPPoE limpo/);
+});
+
+test('troca de roteador limpa somente o MAC e abre a OS apos confirmacao', async () => {
+  const calls = [];
+  const replies = [];
+  const ctx = {
+    chat: { id: 'router-test' },
+    reply: async (message) => replies.push(message),
+  };
+  const state = {
+    step: 'router_replace_confirm',
+    serviceType: 'troca',
+    swapEquipment: 'router',
+    routerMacCleared: false,
+    client: { id: '10', razao: 'CLIENTE TESTE', id_filial: '1' },
+    contract: { id: '20', id_filial: '1', endereco: 'Rua Teste', numero: '1' },
+    login: { id: '30', login: '12345678901' },
+  };
+  const ixc = {
+    clearLoginMac: async (id) => {
+      calls.push(['clearLoginMac', id]);
+      return { type: 'success' };
+    },
+    createAndCloseRouterReplacementOs: async (payload) => {
+      calls.push(['createOs', payload.login.id]);
+      return { serviceOrder: { id: '201' } };
+    },
+  };
+
+  const completed = await completeRouterReplacement(ctx, state, ixc, { dryRun: false });
+
+  assert.equal(completed, true);
+  assert.deepEqual(calls, [
+    ['clearLoginMac', '30'],
+    ['createOs', '30'],
+  ]);
+  assert.match(replies.at(-1), /OS 201 aberta e finalizada/);
+});
+
+test('consulta Potencia Resumo ONU pelo endpoint oficial e ID da fibra', async () => {
+  const client = Object.create(IxcClient.prototype);
+  let request;
+  client.actionPost = async (resource, payload) => {
+    request = { resource, payload };
+    return '<div>SEND POWER : 2.00 (Dbm)</div><div>RECV POWER : -16.50 (Dbm)</div>';
+  };
+
+  const signal = await client.getOnuPowerSummary('50726', { attempts: 1 });
+
+  assert.deepEqual(request, { resource: 'botao_rel_22991', payload: { id: '50726' } });
+  assert.equal(signal.onuRxDbm, '-16.50');
+  assert.equal(signal.onuTxDbm, '2.00');
+});
+
+test('consulta de sinal do cliente encontra fibras por login e contrato sem duplicar', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.findPppoeLoginsByClient = async () => [{ id: '10' }, { id: '11' }];
+  client.findContractsByClient = async () => [{ id: '20' }];
+  client.findFiberClientsByLogin = async (id) =>
+    id === '10' ? [{ id: '100' }] : [{ id: '101' }];
+  client.findFiberClientsByContract = async () => [{ id: '100' }, { id: '102' }];
+
+  const fibers = await client.findFiberClientsByClient('1');
+
+  assert.deepEqual(fibers.map((fiber) => fiber.id), ['100', '101', '102']);
+});
+
+test('consulta de sinal do contrato encontra ONU pelo contrato ou login', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.findFiberClientsByContract = async () => [{ id: '100' }];
+  client.findPppoeLoginsByContract = async () => [{ id: '10' }];
+  client.findFiberClientsByLogin = async () => [{ id: '100' }, { id: '101' }];
+
+  const fibers = await client.findFiberClientsForContract('20');
+
+  assert.deepEqual(fibers.map((fiber) => fiber.id), ['100', '101']);
+});
+
+test('relatorio da caixa prioriza nome do cliente e usa login como contingencia', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.read = async (resource, id) => {
+    if (resource !== 'radusuarios') return null;
+    if (id === '10') return { id: '10', id_cliente: '20', login: 'login-cliente' };
+    return { id: '11', id_cliente: '21', login: 'login-sem-nome' };
+  };
+  client.findClient = async (id) =>
+    id === '20' ? { id: '20', razao: 'CLIENTE COM NOME' } : { id: '21', razao: '' };
+
+  const fibers = await client.enrichFiberClientNames([
+    { id: '1', id_login: '10', nome: 'nome antigo' },
+    { id: '2', id_login: '11', nome: 'outro nome antigo' },
+  ]);
+
+  assert.equal(fibers[0].nome, 'CLIENTE COM NOME');
+  assert.equal(fibers[1].nome, 'login-sem-nome');
+});
+
+test('cadastros de fibra recebem o nome da caixa sem expor o ID na formatacao', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.read = async (resource, id) => {
+    assert.equal(resource, 'rad_caixa_ftth');
+    return id === '50' ? { id: '50', descricao: 'PMS - CAIXA CENTRAL' } : null;
+  };
+
+  const [fiber] = await client.enrichFiberBoxNames([
+    { id: '1', id_caixa_ftth: '50', porta_ftth: '3' },
+  ]);
+
+  assert.equal(fiber.caixa_nome, 'PMS - CAIXA CENTRAL');
+});
+
+test('mensagens de ONU cadastrada e titularidade mostram nome da caixa, nunca o ID', () => {
+  const fiber = {
+    id: '1',
+    mac: 'ONU123',
+    id_caixa_ftth: '50',
+    caixa_nome: 'PMS - CAIXA CENTRAL',
+    porta_ftth: '3',
+  };
+  const authorized = formatAuthorizedOnu(fiber);
+  const titularity = buildTitularitySuccessMessage(
+    { oldFiber: fiber, client: {}, contract: {}, login: {}, profile: {} },
+    fiber
+  );
+
+  assert.match(authorized, /Caixa\/porta: PMS - CAIXA CENTRAL\/3/);
+  assert.match(titularity, /Caixa\/porta: PMS - CAIXA CENTRAL\/3/);
+  assert.doesNotMatch(authorized, /Caixa\/porta: 50/);
+  assert.doesNotMatch(titularity, /Caixa\/porta: 50/);
+});
+
+test('menu de caixas mostra distancia e descricao sem expor ID', () => {
+  const label = formatNearbyBoxLabel({
+    id: '51507',
+    distanceMeters: 42,
+    descricao: 'PMS - ESTOQUE - CAIXA UAI',
+  });
+
+  assert.equal(label, '42m - PMS - ESTOQUE - CAIXA UAI');
+  assert.doesNotMatch(label, /51507/);
+});
+
+test('busca por localizacao inclui caixas VRJ mesmo com status I', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.listAllBoxes = async () => [
+    {
+      id: '1',
+      descricao: 'VRJ - 01 - 068 - PL 01 - PON 00',
+      status: 'I',
+      latitude: '-18.3775247',
+      longitude: '-46.0320954',
+    },
+    {
+      id: '2',
+      descricao: 'OUTRA - CAIXA INATIVA',
+      status: 'I',
+      latitude: '-18.3775247',
+      longitude: '-46.0320954',
+    },
+  ];
+
+  const boxes = await client.findBoxesNearLocation(
+    { latitude: -18.3775, longitude: -46.0321 },
+    { radiusMeters: 300, limit: 10 }
+  );
+
+  assert.deepEqual(boxes.map((box) => box.id), ['1']);
+});
+
+test('relatorio de sinal mantem ONU offline sem interromper as outras consultas', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.getOnuPowerSummary = async (id) => {
+    if (id === '2') throw new Error('ONU Offline: onu is in unactive');
+    return { onuRxDbm: '-18.20', onuTxDbm: '1.80', status: 'Regular' };
+  };
+
+  const reports = await client.getFiberPowerReports([
+    { id: '1', nome: 'Cliente online' },
+    { id: '2', nome: 'Cliente offline' },
+  ]);
+
+  assert.equal(reports[0].signal.onuRxDbm, '-18.20');
+  assert.equal(reports[1].signal, null);
+  assert.equal(reports[1].status, 'Offline');
+});
+
+test('mensagem de sinal mostra RX TX e estado offline de forma curta', () => {
+  const online = formatSignalReportEntry({
+    fiber: {
+      id: '1',
+      nome: 'Cliente A',
+      id_caixa_ftth: '50',
+      caixa_nome: 'PMS - CAIXA CENTRAL',
+      porta_ftth: '3',
+    },
+    signal: {
+      onuRxDbm: '-17.50',
+      onuTxDbm: '2.10',
+      oltRxDbm: '-19.40',
+      status: 'Regular',
+    },
+  }, { showBox: true });
+  const offline = formatSignalReportEntry({
+    fiber: { id: '2', nome: 'Cliente B', porta_ftth: '4' },
+    signal: null,
+    status: 'Offline',
+  });
+
+  assert.match(online, /Caixa: PMS - CAIXA CENTRAL \| Porta 3/);
+  assert.doesNotMatch(online, /Caixa:? 50/);
+  assert.match(online, /RX na ONU: -17.50 dBm/);
+  assert.match(online, /TX da ONU: 2.10 dBm/);
+  assert.match(online, /RX na OLT: -19.40 dBm/);
+  assert.doesNotMatch(online, /fibra 1/i);
+  assert.match(offline, /Cliente B/);
+  assert.match(offline, /Offline/);
+});
+
+test('resultado de sinal mostra somente nova consulta e menu', () => {
+  const labels = signalResultKeyboard().reply_markup.inline_keyboard
+    .flat()
+    .map((button) => button.text);
+
+  assert.deepEqual(labels, ['Verificar outro sinal', 'Menu']);
+  assert.equal(labels.includes('Provisionar'), false);
 });
 
 test('provisionamento executa o botao Autorizar ONU usando o ID do cliente fibra', async () => {
@@ -152,6 +625,64 @@ test('provisionamento executa o botao Autorizar ONU usando o ID do cliente fibra
     ['pending', '1056'],
     ['olt', '50760'],
   ]);
+  assert.equal(result.authorized, true);
+});
+
+test('provisionamento remove cadastro de fibra duplicado silenciosamente e continua', async () => {
+  const client = Object.create(IxcClient.prototype);
+  const calls = [];
+  let duplicateLookup = 0;
+  client.prepareProvisionPayload = async () => ({
+    pendingOnuId: '1056',
+    clienteFibra: { mac: 'ABC123', id_login: '30', id_contrato: '20' },
+  });
+  client.ensureOnuAuthorizationApiAvailable = async () => {};
+  client.findFiberClientsByMac = async () =>
+    duplicateLookup++ === 0 ? [{ id: '45225', id_contrato: '46159' }] : [];
+  client.removeDuplicateFiberClient = async (id) => calls.push(['remove-old', id]);
+  client.create = async () => {
+    calls.push(['create-new']);
+    return { id: '50760' };
+  };
+  client.findProvisionedOnu = async () => ({ id: '50760', mac: 'ABC123' });
+  client.authorizePendingOnu = async () => {};
+  client.authorizeOnu = async () => {};
+  client.read = async () => ({ id: '50760', mac: 'ABC123' });
+
+  const result = await client.provisionOnu({});
+
+  assert.deepEqual(calls, [['remove-old', '45225'], ['create-new']]);
+  assert.equal(result.authorized, true);
+});
+
+test('troca remove cliente fibra antigo vinculado ao login mesmo com contrato zerado', async () => {
+  const client = Object.create(IxcClient.prototype);
+  const calls = [];
+  let loginLookup = 0;
+  client.prepareProvisionPayload = async () => ({
+    pendingOnuId: '1056',
+    cleanupExistingLogin: true,
+    clienteFibra: { mac: 'NOVO123', id_login: '39661', id_contrato: '41830' },
+  });
+  client.ensureOnuAuthorizationApiAvailable = async () => {};
+  client.findFiberClientsByMac = async () => [];
+  client.findFiberClientsByLogin = async () =>
+    loginLookup++ === 0
+      ? [{ id: '21758', id_contrato: '0', id_login: '39661', mac: 'ANTIGO123' }]
+      : [];
+  client.removeDuplicateFiberClient = async (id) => calls.push(['remove-old-login', id]);
+  client.create = async () => {
+    calls.push(['create-new']);
+    return { id: '50760' };
+  };
+  client.findProvisionedOnu = async () => ({ id: '50760', mac: 'NOVO123' });
+  client.authorizePendingOnu = async () => {};
+  client.authorizeOnu = async () => {};
+  client.read = async () => ({ id: '50760', mac: 'NOVO123' });
+
+  const result = await client.provisionOnu({});
+
+  assert.deepEqual(calls, [['remove-old-login', '21758'], ['create-new']]);
   assert.equal(result.authorized, true);
 });
 
@@ -182,6 +713,281 @@ test('Gravar dispositivo usa o endpoint 22408 e o ID do cliente fibra', async ()
     resource: 'botao_gravar_dispositivo_22408',
     payload: { id: '50760' },
   });
+});
+
+test('remocao desautoriza a ONU no dispositivo antes de excluir o cadastro de fibra', async () => {
+  const client = Object.create(IxcClient.prototype);
+  const calls = [];
+  client.actionPost = async (resource, payload) => {
+    calls.push(['post', resource, payload]);
+    return 'Dispositivo excluido com sucesso.';
+  };
+  client.delete = async (resource, id) => {
+    calls.push(['delete', resource, id]);
+    return { type: 'success' };
+  };
+
+  await client.removeAuthorizedOnu('50749');
+
+  assert.deepEqual(calls, [
+    ['post', 'botao_excluir_dispositivo_22434', { id: '50749' }],
+    ['delete', 'radpop_radio_cliente_fibra', '50749'],
+  ]);
+});
+
+test('falha ao desautorizar preserva o cadastro de fibra antigo', async () => {
+  const client = Object.create(IxcClient.prototype);
+  let deleted = false;
+  client.actionPost = async () =>
+    '<div class="panel panel-danger">Desautorizacao de ONU: Registro nao encontrado!</div>';
+  client.delete = async () => {
+    deleted = true;
+  };
+
+  await assert.rejects(
+    () => client.removeAuthorizedOnu('50749'),
+    /desautorizar ONU no dispositivo/
+  );
+  assert.equal(deleted, false);
+});
+
+test('limpeza de duplicidade exclui cadastro orfao quando ONU ja nao existe na OLT', async () => {
+  const client = Object.create(IxcClient.prototype);
+  const calls = [];
+  client.actionPost = async () =>
+    '<div class="panel panel-danger">Desautorizacao de ONU: Registro nao encontrado!</div>';
+  client.delete = async (resource, id) => {
+    calls.push([resource, id]);
+    return { type: 'success' };
+  };
+
+  await client.removeDuplicateFiberClient('45225');
+
+  assert.deepEqual(calls, [['radpop_radio_cliente_fibra', '45225']]);
+});
+
+test('troca de titularidade preserva os campos existentes no PUT', async () => {
+  const client = Object.create(IxcClient.prototype);
+  let updateCall;
+  client.read = async () => ({
+    id: '50749',
+    mac: '485754432D0E86B2',
+    id_transmissor: '1056',
+    id_caixa_ftth: '41255',
+    porta_ftth: '6',
+    vlan: '1001',
+    id_contrato: '75637',
+    id_login: '71726',
+    nome: 'Cliente antigo',
+  });
+  client.update = async (resource, id, payload) => {
+    updateCall = { resource, id, payload };
+    return { type: 'success' };
+  };
+
+  await client.transferFiberClient('50749', {
+    id_contrato: '80000',
+    id_login: '90000',
+    nome: 'Cliente novo',
+    endereco_padrao_cliente: 'S',
+    id_perfil: '30',
+  });
+
+  assert.equal(updateCall.resource, 'radpop_radio_cliente_fibra');
+  assert.equal(updateCall.id, '50749');
+  assert.equal(updateCall.payload.mac, '485754432D0E86B2');
+  assert.equal(updateCall.payload.id_transmissor, '1056');
+  assert.equal(updateCall.payload.id_caixa_ftth, '41255');
+  assert.equal(updateCall.payload.porta_ftth, '6');
+  assert.equal(updateCall.payload.vlan, '1001');
+  assert.equal(updateCall.payload.id_contrato, '80000');
+  assert.equal(updateCall.payload.id_login, '90000');
+  assert.equal(updateCall.payload.id_perfil, '30');
+});
+
+test('consulta ONU existente pelo login novo antes da troca de titularidade', async () => {
+  const client = Object.create(IxcClient.prototype);
+  let request;
+  client.list = async (resource, params) => {
+    request = { resource, params };
+    return [{ id: '60000', id_login: '90000' }];
+  };
+
+  const rows = await client.findFiberClientsByLogin('90000');
+
+  assert.equal(rows[0].id, '60000');
+  assert.equal(request.resource, 'radpop_radio_cliente_fibra');
+  assert.equal(request.params.qtype, 'radpop_radio_cliente_fibra.id_login');
+  assert.equal(request.params.query, '90000');
+  assert.equal(request.params.oper, '=');
+});
+
+test('troca de titularidade reutiliza o perfil da ONU antiga', async () => {
+  let readCall;
+  const ixc = {
+    read: async (resource, id) => {
+      readCall = { resource, id };
+      return { id: '30', nome: 'ONU integrada' };
+    },
+  };
+
+  const profile = await findExistingTitularityProfile(ixc, { id_perfil: '30' });
+
+  assert.deepEqual(readCall, {
+    resource: 'radpop_radio_cliente_fibra_perfil',
+    id: '30',
+  });
+  assert.equal(profile.id, '30');
+});
+
+test('troca de titularidade pede script quando a ONU antiga nao possui perfil', async () => {
+  let queried = false;
+  const ixc = {
+    read: async () => {
+      queried = true;
+    },
+  };
+
+  const profile = await findExistingTitularityProfile(ixc, { id_perfil: '0' });
+
+  assert.equal(profile, null);
+  assert.equal(queried, false);
+});
+
+test('busca de ONU aceita fragmento de serial com no minimo quatro caracteres', () => {
+  assert.equal(normalizeSerialFragment(' ea74 '), 'EA74');
+  assert.equal(normalizeSerialFragment('a5b2'), 'A5B2');
+  assert.equal(normalizeSerialFragment('abc'), null);
+  assert.equal(normalizeSerialFragment('ab-12'), null);
+});
+
+test('PPPoE aceita CPF puro, letra ou numeros extras para contratos adicionais', () => {
+  const client = { cnpj_cpf: '123.456.789-01' };
+  for (const login of [
+    '12345678901',
+    'A12345678901',
+    '12345678901F',
+    '123456789011',
+    '12' + '12345678901',
+    'B1234567890102',
+  ]) {
+    assert.equal(
+      validatePppoeCredentials(client, { login, senha: '123456' }).valid,
+      true,
+      login
+    );
+  }
+});
+
+test('PPPoE bloqueia nome no login e senha fora dos seis primeiros digitos', () => {
+  const client = { cnpj_cpf: '123.456.789-01' };
+  assert.equal(
+    validatePppoeCredentials(client, { login: 'Edna123', senha: '123456' }).reason,
+    'login'
+  );
+  assert.equal(
+    validatePppoeCredentials(client, { login: '12345678901', senha: '654321' }).reason,
+    'senha'
+  );
+});
+
+test('mensagem final de ONU integrada orienta configurar VLAN e PPPoE na ONU', () => {
+  const message = buildProvisionSuccessMessage(
+    {
+      profile: { nome: 'ONU-INTEGRADA-OLT02.PMS' },
+      login: { login: '12345678901', senha: '123456' },
+      box: { descricao: 'CX-01' },
+      dropPort: '3',
+      onu: { mac: 'ONU123' },
+    },
+    { mac: 'ONU123', vlan: '3017' }
+  );
+
+  assert.match(message, /Configure a ONU/);
+  assert.match(message, /VLAN: 3017/);
+  assert.match(message, /PPPoE: 12345678901/);
+});
+
+test('mensagem final de bridge orienta configurar somente PPPoE no roteador', () => {
+  const message = buildProvisionSuccessMessage(
+    {
+      profile: { nome: 'ONU-BRIDGE-OLT02.PMS' },
+      login: { login: '12345678901', senha: '123456' },
+      box: { descricao: 'CX-01' },
+      dropPort: '3',
+      onu: { mac: 'ONU123' },
+    },
+    { mac: 'ONU123', vlan: '3017' }
+  );
+
+  assert.match(message, /Configure o roteador/);
+  assert.match(message, /PPPoE: 12345678901/);
+  assert.doesNotMatch(message, /VLAN:/);
+});
+
+test('menu do tecnico reduz scripts para bridge e integrada sem expor IDs', () => {
+  const choices = selectTechnicianProfiles(
+    [
+      { id: '20', nome: 'ONU BRIDGE OLT 02' },
+      { id: '26', nome: 'ONU INTEGRADA OLT 02' },
+      { id: '78', nome: 'ONU INTEGRADA COM VOIP OLT 02' },
+    ],
+    '26'
+  );
+
+  assert.deepEqual(choices.map((profile) => profile.id), ['20', '26']);
+});
+
+test('troca sem ONU antiga continua pedindo localizacao para provisionar normalmente', async () => {
+  const replies = [];
+  const ctx = {
+    reply: async (message, keyboard) => replies.push({ message, keyboard }),
+  };
+  const state = {
+    serviceType: 'troca',
+    contract: { id: '60744' },
+    oldFiber: null,
+  };
+  const ixc = {
+    findFiberClientsByContract: async () => [],
+  };
+
+  await handleSwapAfterContractChoice(ctx, state, ixc);
+
+  assert.equal(state.swapWithoutOldFiber, true);
+  assert.equal(state.step, 'box_location');
+  assert.match(replies[0].message, /Envie sua localizacao/);
+});
+
+test('filtro de ONU pendente compara somente o serial', () => {
+  const client = Object.create(IxcClient.prototype);
+  const rows = [
+    { mac: 'HWTCea74a5b2', modelo: 'HG260' },
+    { mac: 'HWTC00000000', modelo: 'EA74' },
+  ];
+
+  const matches = client.filterPendingOnusBySerialSuffix(rows, 'ea74');
+
+  assert.deepEqual(matches.map((onu) => onu.mac), ['HWTCea74a5b2']);
+});
+
+test('ONU autorizada usa consulta parcial pelo MAC', async () => {
+  const client = Object.create(IxcClient.prototype);
+  let request;
+  client.list = async (resource, params) => {
+    request = { resource, params };
+    return [
+      { id: '1', mac: 'HWTCea74a5b2' },
+      { id: '2', mac: 'HWTCea74feb2' },
+    ];
+  };
+
+  const rows = await client.findAuthorizedOnusBySerialSuffix('ea74');
+
+  assert.deepEqual(rows.map((onu) => onu.mac), ['HWTCea74a5b2', 'HWTCea74feb2']);
+  assert.equal(request.resource, 'radpop_radio_cliente_fibra');
+  assert.equal(request.params.qtype, 'radpop_radio_cliente_fibra.mac');
+  assert.equal(request.params.oper, 'L');
 });
 
 test('Consultar todas atualiza a fila separadamente para cada OLT ativa', async () => {
