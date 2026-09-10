@@ -79,6 +79,24 @@ const resetSession = (ctx) => {
   return sessions.get(sessionKey(ctx));
 };
 
+const isExpiredCallbackQueryError = (error) =>
+  error?.code === 400 &&
+  /query is too old|query id is invalid|response timeout expired/i.test(
+    String(error?.description || error?.message || '')
+  );
+
+export const answerCallbackQuerySafely = async (answerCbQuery, ...args) => {
+  try {
+    return await answerCbQuery(...args);
+  } catch (error) {
+    if (isExpiredCallbackQueryError(error)) {
+      console.warn('Callback antigo do Telegram ignorado; o fluxo continuou normalmente.');
+      return undefined;
+    }
+    throw error;
+  }
+};
+
 const mustChooseMessage = 'Use os botoes da mensagem anterior ou envie /cancelar para recomecar.';
 
 const setMenuChoices = (state, rows, step) => {
@@ -834,6 +852,13 @@ const askFreePortChoice = async (ctx, state, ixc) => {
 };
 
 export const registerFlow = (bot, ixc, config) => {
+  bot.use(async (ctx, next) => {
+    if (typeof ctx.answerCbQuery === 'function') {
+      const originalAnswerCbQuery = ctx.answerCbQuery.bind(ctx);
+      ctx.answerCbQuery = (...args) => answerCallbackQuerySafely(originalAnswerCbQuery, ...args);
+    }
+    return next();
+  });
 
   bot.use(async (ctx, next) => {
     if (!ensureAllowed(ctx, config.allowedTelegramIds)) {

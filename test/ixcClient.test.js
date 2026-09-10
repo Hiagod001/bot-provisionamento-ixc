@@ -10,6 +10,7 @@ import {
   selectProfilesForOlt,
 } from '../src/ixcClient.js';
 import {
+  answerCallbackQuerySafely,
   findExistingTitularityProfile,
   formatNearbyBoxLabel,
   handleSwapAfterContractChoice,
@@ -102,6 +103,20 @@ test('iniciar e navegar pelos menus preserva o historico de mensagens', async ()
     await actions.find(({ pattern }) => pattern.test(data)).handler(ctx);
   }
   assert.equal(deletions, 0);
+});
+
+test('callback antigo do Telegram nao interrompe o fluxo', async () => {
+  const expiredError = Object.assign(new Error('400: Bad Request: query is too old and response timeout expired'), {
+    code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid',
+  });
+  const result = await answerCallbackQuerySafely(async () => { throw expiredError; }, 'Confirmado');
+  assert.equal(result, undefined);
+
+  await assert.rejects(
+    answerCallbackQuerySafely(async () => { throw Object.assign(new Error('Forbidden'), { code: 403 }); }),
+    /Forbidden/
+  );
 });
 
 const profiles = [
@@ -334,6 +349,60 @@ test('fechamento da OS marca finalizar atendimento no payload nativo', async () 
   assert.equal(closeCall.payload.finaliza_processo, 'S');
   assert.equal(closeCall.payload.status, 'F');
   assert.match(closeCall.payload.mensagem, /ONU RX -18.00 dBm/);
+});
+
+test('OS e aberta mesmo quando a leitura de potencia fica indisponivel', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.os = {
+    enabled: true,
+    subjectId: '7',
+    sectorId: '3',
+    processId: '71',
+    taskId: '677',
+    responseId: '5',
+    diagnosisId: '507',
+    technicianId: '367',
+  };
+
+  let signalReads = 0;
+  let createdMessage = '';
+  client.getOnuPowerSummary = async () => { signalReads += 1; };
+  client.createAndCloseServiceOs = async ({ message }) => {
+    createdMessage = message;
+    return { ticket: { id: '100' }, serviceOrder: { id: '200' } };
+  };
+
+  const result = await client.createAndCloseProvisioningOs({
+    client: { id: '10' },
+    contract: { id: '20' },
+    login: { id: '30' },
+    fiberId: '40',
+    box: 'CX-01',
+    port: '4',
+    serial: 'SERIAL1',
+    signal: null,
+  });
+
+  assert.equal(result.serviceOrder.id, '200');
+  assert.equal(signalReads, 0);
+  assert.match(createdMessage, /Sinal da ONU recebido na OLT \(RX\): Nao informado/);
+  assert.match(createdMessage, /Sinal Optico no Cliente: Nao informado/);
+});
+
+test('consulta de leitura do IXC repete uma vez em erro transitorio', async () => {
+  const client = Object.create(IxcClient.prototype);
+  let attempts = 0;
+  client.http = {
+    get: async () => {
+      attempts += 1;
+      if (attempts === 1) throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' });
+      return { data: { registros: [{ id: '10' }] } };
+    },
+  };
+
+  const rows = await client.list('cliente');
+  assert.deepEqual(rows, [{ id: '10' }]);
+  assert.equal(attempts, 2);
 });
 
 test('troca de roteador abre e finaliza OS especifica sem consultar ONU', async () => {

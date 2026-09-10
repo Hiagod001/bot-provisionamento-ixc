@@ -383,7 +383,7 @@ export class IxcClient {
     const shouldSkipParams =
       table === 'fh_onu_nao_autorizadas' && Object.keys(params).length === 0;
 
-    const response = await this.http.get(`/${table}`, {
+    const request = () => this.http.get(`/${table}`, {
       headers: { ixcsoft: 'listar' },
       data: shouldSkipParams
         ? undefined
@@ -395,6 +395,16 @@ export class IxcClient {
             ...params,
           },
     });
+
+    let response;
+    try {
+      response = await request();
+    } catch (error) {
+      const transientCodes = ['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN'];
+      if (!transientCodes.includes(error?.code)) throw error;
+      console.warn(`IXC oscilou ao consultar ${table}; repetindo a leitura uma vez.`);
+      response = await request();
+    }
     return dataRows(response);
   }
 
@@ -1165,8 +1175,13 @@ export class IxcClient {
   }) {
     if (!this.os.enabled) return null;
 
-    if (!fiberId) throw new Error('Cadastro de fibra sem ID para consultar a potencia da ONU.');
-    const signal = suppliedSignal || await this.getOnuPowerSummary(fiberId);
+    const shouldReadSignal = suppliedSignal === undefined;
+    if (shouldReadSignal && !fiberId) {
+      throw new Error('Cadastro de fibra sem ID para consultar a potencia da ONU.');
+    }
+    const signal = shouldReadSignal
+      ? await this.getOnuPowerSummary(fiberId)
+      : suppliedSignal || {};
     const message = buildProvisionOsMessage({ box, port, serial, signal });
     const result = await this.createAndCloseServiceOs({
       client,
