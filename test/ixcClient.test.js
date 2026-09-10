@@ -518,18 +518,27 @@ test('menu de caixas mostra distancia e descricao sem expor ID', () => {
   assert.doesNotMatch(label, /51507/);
 });
 
-test('busca por localizacao inclui caixas VRJ mesmo com status I', async () => {
+test('busca por localizacao mostra somente caixas VRJ do projeto Importacao', async () => {
   const client = Object.create(IxcClient.prototype);
   client.listAllBoxes = async () => [
     {
       id: '1',
-      descricao: 'VRJ - 01 - 068 - PL 01 - PON 00',
-      status: 'I',
+      descricao: 'VRJ - 01-068',
+      id_projeto: '1',
+      status: 'A',
       latitude: '-18.3775247',
       longitude: '-46.0320954',
     },
     {
       id: '2',
+      descricao: 'VRJ - 01 - 068 - PL 01 - PON 00',
+      id_projeto: '35',
+      status: 'A',
+      latitude: '-18.3775247',
+      longitude: '-46.0320954',
+    },
+    {
+      id: '3',
       descricao: 'OUTRA - CAIXA INATIVA',
       status: 'I',
       latitude: '-18.3775247',

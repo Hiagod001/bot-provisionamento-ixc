@@ -343,9 +343,11 @@ const distanceMeters = (from, to) => {
 };
 
 const isBoxAvailableForLocation = (box) => {
-  if (box?.status === 'A') return true;
   const description = String(box?.descricao || box?.nome || '').trim();
-  return /^VRJ(?:\s*-|\s|$)/i.test(description);
+  if (/^VRJ(?:\s*-|\s|$)/i.test(description)) {
+    return String(box?.id_projeto) === '1';
+  }
+  return box?.status === 'A';
 };
 
 export class IxcClient {
