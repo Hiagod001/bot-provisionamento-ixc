@@ -344,7 +344,7 @@ const distanceMeters = (from, to) => {
 
 const isBoxAvailableForLocation = (box) => {
   const description = String(box?.descricao || box?.nome || '').trim();
-  if (/^VRJ(?:\s*-|\s|$)/i.test(description)) {
+  if (/^(?:VRJ|PTC|PARACATU)(?:\s*-|\s|$)/i.test(description)) {
     return String(box?.id_projeto) === '1';
   }
   return box?.status === 'A';

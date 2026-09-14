@@ -11,6 +11,7 @@ import {
 } from '../src/ixcClient.js';
 import {
   answerCallbackQuerySafely,
+  buildProvisionPayload,
   findExistingTitularityProfile,
   formatNearbyBoxLabel,
   handleSwapAfterContractChoice,
@@ -621,6 +622,52 @@ test('busca por localizacao mostra somente caixas VRJ do projeto Importacao', as
   );
 
   assert.deepEqual(boxes.map((box) => box.id), ['1']);
+});
+
+test('busca por localizacao mostra somente caixas PTC do projeto Importacao', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.listAllBoxes = async () => [
+    {
+      id: '10',
+      descricao: 'PTC - 04-001',
+      id_projeto: '1',
+      status: 'A',
+      latitude: '-17.2220',
+      longitude: '-46.8740',
+    },
+    {
+      id: '11',
+      descricao: 'PTC - 04 - 001 - PL 01 - PON 00',
+      id_projeto: '34',
+      status: 'A',
+      latitude: '-17.2220',
+      longitude: '-46.8740',
+    },
+  ];
+
+  const boxes = await client.findBoxesNearLocation(
+    { latitude: -17.2220, longitude: -46.8740 },
+    { radiusMeters: 300, limit: 10 }
+  );
+
+  assert.deepEqual(boxes.map((box) => box.id), ['10']);
+});
+
+test('provisionamento grava explicitamente o projeto da caixa escolhida', () => {
+  const payload = buildProvisionPayload({
+    serviceType: 'instalacao',
+    onu: { id: '1', mac: 'ABC123' },
+    olt: { id: '2' },
+    box: { id: '10', id_projeto: '1' },
+    dropPort: '4',
+    contract: { id: '20' },
+    login: { id: '30' },
+    client: { razao: 'Cliente teste' },
+    profile: { id: '40' },
+  });
+
+  assert.equal(payload.clienteFibra.id_caixa_ftth, '10');
+  assert.equal(payload.clienteFibra.id_projeto, '1');
 });
 
 test('relatorio de sinal mantem ONU offline sem interromper as outras consultas', async () => {

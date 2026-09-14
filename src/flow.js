@@ -769,13 +769,14 @@ const selectByCallback = async (ctx, prefix, expectedStep, field, nextStep, next
   return selected;
 };
 
-const buildProvisionPayload = (state) => ({
+export const buildProvisionPayload = (state) => ({
   pendingOnuId: state.onu?.id,
   cleanupExistingLogin: state.serviceType === 'troca',
   clienteFibra: {
     radpop_estrutura: 'N',
     id_transmissor: short(state.olt?.id || state.onu?.id_olt, ''),
     id_caixa_ftth: short(state.box?.id, ''),
+    id_projeto: short(state.box?.id_projeto, ''),
     porta_ftth: short(state.dropPort, ''),
     id_contrato: short(state.contract?.id, ''),
     id_login: short(state.login?.id, ''),
