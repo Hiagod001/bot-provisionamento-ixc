@@ -732,11 +732,13 @@ const enrichCityNames = async (ixc, records) => {
   }
 };
 
-export const sendProvisionSignal = async (ctx, ixc, fiber) => {
-  let signal;
+export const sendProvisionSignal = async (ctx, ixc, fiber, confirmedSignal) => {
+  let signal = confirmedSignal;
   try {
-    if (!fiber?.id) throw new Error('ONU sem ID para consultar sinal');
-    signal = await ixc.getOnuPowerSummary(fiber.id);
+    if (!signal) {
+      if (!fiber?.id) throw new Error('ONU sem ID para consultar sinal');
+      signal = await ixc.getOnuPowerSummary(fiber.id);
+    }
   } catch (error) {
     console.error('Sinal apos provisionamento indisponivel:', error?.message || error);
   }
@@ -1286,7 +1288,7 @@ export const registerFlow = (bot, ixc, config) => {
       await activateContractWithWarning(ctx, state, ixc);
       const result = await ixc.provisionOnu(payload);
       await ctx.reply(buildProvisionSuccessMessage(state, result.provisionedOnu));
-      const signal = await sendProvisionSignal(ctx, ixc, result.provisionedOnu);
+      const signal = await sendProvisionSignal(ctx, ixc, result.provisionedOnu, result.signal);
       if (config.ixc.os.enabled) {
         try {
           const osResult = await ixc.createAndCloseProvisioningOs({

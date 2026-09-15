@@ -624,21 +624,41 @@ test('busca por localizacao mostra somente caixas VRJ do projeto Importacao', as
   assert.deepEqual(boxes.map((box) => box.id), ['1']);
 });
 
-test('busca por localizacao mostra somente caixas PTC do projeto Importacao', async () => {
+test('busca por localizacao de Paracatu mostra somente caixas PTU da OLT e projeto Importacao', async () => {
   const client = Object.create(IxcClient.prototype);
   client.listAllBoxes = async () => [
     {
       id: '10',
-      descricao: 'PTC - 04-001',
+      descricao: 'PTU - 03-001',
       id_projeto: '1',
+      id_transmissor: '5',
       status: 'A',
       latitude: '-17.2220',
       longitude: '-46.8740',
     },
     {
       id: '11',
-      descricao: 'PTC - 04 - 001 - PL 01 - PON 00',
-      id_projeto: '34',
+      descricao: 'PTU - 03 - 001 - PL 01 - PON 00',
+      id_projeto: '38',
+      id_transmissor: '5',
+      status: 'A',
+      latitude: '-17.2220',
+      longitude: '-46.8740',
+    },
+    {
+      id: '12',
+      descricao: 'PTC - 04-001',
+      id_projeto: '1',
+      id_transmissor: '5',
+      status: 'A',
+      latitude: '-17.2220',
+      longitude: '-46.8740',
+    },
+    {
+      id: '13',
+      descricao: 'PTU - OUTRA OLT',
+      id_projeto: '1',
+      id_transmissor: '1',
       status: 'A',
       latitude: '-17.2220',
       longitude: '-46.8740',
@@ -742,6 +762,10 @@ test('provisionamento executa o botao Autorizar ONU usando o ID do cliente fibra
   client.findProvisionedOnu = async () => ({ id: '50760', mac: 'ABC123' });
   client.authorizePendingOnu = async (id) => calls.push(['pending', id]);
   client.authorizeOnu = async (id) => calls.push(['olt', id]);
+  client.getOnuPowerSummary = async (id, options) => {
+    calls.push(['confirm-power', id, options.attempts]);
+    return { onuRxDbm: '-20.00', oltRxDbm: '-21.00' };
+  };
   client.read = async () => ({ id: '50760', mac: 'ABC123' });
 
   const result = await client.provisionOnu({});
@@ -750,8 +774,31 @@ test('provisionamento executa o botao Autorizar ONU usando o ID do cliente fibra
     ['preflight'],
     ['pending', '1056'],
     ['olt', '50760'],
+    ['confirm-power', '50760', 10],
   ]);
   assert.equal(result.authorized, true);
+});
+
+test('provisionamento nao confirma sucesso sem validar a ONU ativa na OLT', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.prepareProvisionPayload = async () => ({
+    pendingOnuId: '1056',
+    clienteFibra: { mac: 'ABC123', id_login: '30', id_contrato: '20' },
+  });
+  client.ensureOnuAuthorizationApiAvailable = async () => {};
+  client.findFiberClientsByMac = async () => [];
+  client.findFiberClientsByLogin = async () => [];
+  client.create = async () => ({ id: '50760' });
+  client.findProvisionedOnu = async () => ({ id: '50760', mac: 'ABC123' });
+  client.authorizePendingOnu = async () => {};
+  client.authorizeOnu = async () => {};
+  client.read = async () => ({ id: '50760', mac: 'ABC123' });
+  client.getOnuPowerSummary = async () => { throw new Error('ONU Offline'); };
+
+  await assert.rejects(
+    () => client.provisionOnu({}),
+    (error) => error.code === 'ONU_NOT_CONFIRMED_ON_OLT' && /nao foi confirmada ativa na OLT/.test(error.message)
+  );
 });
 
 test('provisionamento remove cadastro de fibra duplicado silenciosamente e continua', async () => {
@@ -774,6 +821,7 @@ test('provisionamento remove cadastro de fibra duplicado silenciosamente e conti
   client.findProvisionedOnu = async () => ({ id: '50760', mac: 'ABC123' });
   client.authorizePendingOnu = async () => {};
   client.authorizeOnu = async () => {};
+  client.getOnuPowerSummary = async () => ({ onuRxDbm: '-20.00' });
   client.read = async () => ({ id: '50760', mac: 'ABC123' });
 
   const result = await client.provisionOnu({});
@@ -804,6 +852,7 @@ test('qualquer provisionamento remove cliente fibra antigo vinculado ao login', 
   client.findProvisionedOnu = async () => ({ id: '50760', mac: 'NOVO123' });
   client.authorizePendingOnu = async () => {};
   client.authorizeOnu = async () => {};
+  client.getOnuPowerSummary = async () => ({ onuRxDbm: '-20.00' });
   client.read = async () => ({ id: '50760', mac: 'NOVO123' });
 
   const result = await client.provisionOnu({});
