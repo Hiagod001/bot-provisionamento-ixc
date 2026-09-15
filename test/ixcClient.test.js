@@ -12,6 +12,7 @@ import {
 import {
   answerCallbackQuerySafely,
   buildProvisionPayload,
+  clearLoginMacWithWarning,
   findExistingTitularityProfile,
   formatNearbyBoxLabel,
   handleSwapAfterContractChoice,
@@ -483,6 +484,29 @@ test('troca de roteador limpa somente o MAC e abre a OS apos confirmacao', async
     ['createOs', '30'],
   ]);
   assert.match(replies.at(-1), /OS 201 aberta e finalizada/);
+});
+
+test('mudanca de endereco limpa o MAC do login uma unica vez', async () => {
+  const calls = [];
+  const state = {
+    serviceType: 'mudanca',
+    login: { id: '71825' },
+    loginMacCleared: false,
+    macCleanupWarning: null,
+  };
+  const ixc = {
+    clearLoginMac: async (id) => {
+      calls.push(id);
+      return { type: 'success' };
+    },
+  };
+
+  await clearLoginMacWithWarning({}, state, ixc);
+  await clearLoginMacWithWarning({}, state, ixc);
+
+  assert.deepEqual(calls, ['71825']);
+  assert.equal(state.loginMacCleared, true);
+  assert.equal(state.macCleanupWarning, null);
 });
 
 test('consulta Potencia Resumo ONU pelo endpoint oficial e ID da fibra', async () => {

@@ -56,6 +56,7 @@ const newSession = () => ({
   skipLoginAfterContractChoice: false,
   contractActivationWarning: null,
   macCleanupWarning: null,
+  loginMacCleared: false,
   olt: null,
   box: null,
   dropPort: null,
@@ -499,8 +500,12 @@ const activateContractWithWarning = async (ctx, state, ixc) => {
   console.log(`Contrato ${state.contract.id} ativado pelo bot.`);
 };
 
-const clearLoginMacWithWarning = async (ctx, state, ixc) => {
-  if (!['troca', 'mudanca'].includes(state.serviceType) || !state.login?.id) return;
+export const clearLoginMacWithWarning = async (ctx, state, ixc) => {
+  if (
+    !['troca', 'mudanca'].includes(state.serviceType) ||
+    !state.login?.id ||
+    state.loginMacCleared
+  ) return;
 
   const response = await ixc.clearLoginMac(state.login.id);
   if (response?.type === 'error') {
@@ -509,6 +514,7 @@ const clearLoginMacWithWarning = async (ctx, state, ixc) => {
     return;
   }
 
+  state.loginMacCleared = true;
   console.log(`MAC do login ${state.login.id} limpo pelo bot.`);
 };
 
@@ -1207,6 +1213,7 @@ export const registerFlow = (bot, ixc, config) => {
       return;
     }
     if (state.serviceType === 'mudanca' && state.login?.id) {
+      await clearLoginMacWithWarning(ctx, state, ixc);
       await askProfile(ctx, state, ixc);
       return;
     }
