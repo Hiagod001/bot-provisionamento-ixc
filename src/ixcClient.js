@@ -1210,9 +1210,7 @@ export class IxcClient {
     await this.ensureOnuAuthorizationApiAvailable();
     const [macDuplicates, loginDuplicates] = await Promise.all([
       this.findFiberClientsByMac(prepared.clienteFibra.mac),
-      prepared.cleanupExistingLogin
-        ? this.findFiberClientsByLogin(prepared.clienteFibra.id_login)
-        : Promise.resolve([]),
+      this.findFiberClientsByLogin(prepared.clienteFibra.id_login),
     ]);
     const duplicates = [
       ...new Map(
@@ -1228,9 +1226,7 @@ export class IxcClient {
     if (duplicates.length) {
       const [remainingByMac, remainingByLogin] = await Promise.all([
         this.findFiberClientsByMac(prepared.clienteFibra.mac),
-        prepared.cleanupExistingLogin
-          ? this.findFiberClientsByLogin(prepared.clienteFibra.id_login)
-          : Promise.resolve([]),
+        this.findFiberClientsByLogin(prepared.clienteFibra.id_login),
       ]);
       const remainingDuplicates = [...remainingByMac, ...remainingByLogin];
       if (remainingDuplicates.length) {

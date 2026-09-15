@@ -737,6 +737,7 @@ test('provisionamento executa o botao Autorizar ONU usando o ID do cliente fibra
   });
   client.ensureOnuAuthorizationApiAvailable = async () => calls.push(['preflight']);
   client.findFiberClientsByMac = async () => [];
+  client.findFiberClientsByLogin = async () => [];
   client.create = async () => ({ id: '50760' });
   client.findProvisionedOnu = async () => ({ id: '50760', mac: 'ABC123' });
   client.authorizePendingOnu = async (id) => calls.push(['pending', id]);
@@ -764,6 +765,7 @@ test('provisionamento remove cadastro de fibra duplicado silenciosamente e conti
   client.ensureOnuAuthorizationApiAvailable = async () => {};
   client.findFiberClientsByMac = async () =>
     duplicateLookup++ === 0 ? [{ id: '45225', id_contrato: '46159' }] : [];
+  client.findFiberClientsByLogin = async () => [];
   client.removeDuplicateFiberClient = async (id) => calls.push(['remove-old', id]);
   client.create = async () => {
     calls.push(['create-new']);
@@ -780,13 +782,12 @@ test('provisionamento remove cadastro de fibra duplicado silenciosamente e conti
   assert.equal(result.authorized, true);
 });
 
-test('troca remove cliente fibra antigo vinculado ao login mesmo com contrato zerado', async () => {
+test('qualquer provisionamento remove cliente fibra antigo vinculado ao login', async () => {
   const client = Object.create(IxcClient.prototype);
   const calls = [];
   let loginLookup = 0;
   client.prepareProvisionPayload = async () => ({
     pendingOnuId: '1056',
-    cleanupExistingLogin: true,
     clienteFibra: { mac: 'NOVO123', id_login: '39661', id_contrato: '41830' },
   });
   client.ensureOnuAuthorizationApiAvailable = async () => {};
