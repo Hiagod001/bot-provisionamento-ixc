@@ -697,6 +697,21 @@ test('busca por localizacao de Paracatu mostra somente caixas PTU da OLT e proje
   assert.deepEqual(boxes.map((box) => box.id), ['10']);
 });
 
+test('Patrocinio mostra somente caixas PTC do projeto Importacao e OLT 1', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.listAllBoxes = async () => [
+    { id: '1', descricao: 'PTC - 03-23 - PL 06 - PON 16', id_projeto: '1', id_transmissor: '1', status: 'A', latitude: '-18.94', longitude: '-46.99' },
+    { id: '2', descricao: 'PTC - 03 - 023 - PL 06 - PON 16', id_projeto: '31', id_transmissor: '1', status: 'A', latitude: '-18.94', longitude: '-46.99' },
+    { id: '3', descricao: 'PTC - OUTRA OLT', id_projeto: '1', id_transmissor: '5', status: 'A', latitude: '-18.94', longitude: '-46.99' },
+    { id: '4', descricao: 'PTU - PARACATU', id_projeto: '1', id_transmissor: '5', status: 'A', latitude: '-17.22', longitude: '-46.87' },
+  ];
+  const boxes = await client.findBoxesNearLocation(
+    { latitude: -18.94, longitude: -46.99 },
+    { radiusMeters: 300, limit: 10 }
+  );
+  assert.deepEqual(boxes.map((box) => box.id), ['1']);
+});
+
 test('provisionamento grava explicitamente o projeto da caixa escolhida', () => {
   const payload = buildProvisionPayload({
     serviceType: 'instalacao',

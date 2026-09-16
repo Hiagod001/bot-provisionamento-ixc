@@ -350,7 +350,10 @@ const isBoxAvailableForLocation = (box) => {
   if (/^PTU(?:\s*-|\s|$)/i.test(description)) {
     return String(box?.id_projeto) === '1' && String(box?.id_transmissor) === '5';
   }
-  if (/^(?:PTC|PARACATU)(?:\s*-|\s|$)/i.test(description)) return false;
+  if (/^PTC(?:\s*-|\s|$)/i.test(description)) {
+    return String(box?.id_projeto) === '1' && String(box?.id_transmissor) === '1';
+  }
+  if (/^PARACATU(?:\s*-|\s|$)/i.test(description)) return false;
   return box?.status === 'A';
 };
 
