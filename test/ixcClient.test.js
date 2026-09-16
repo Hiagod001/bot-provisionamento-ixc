@@ -212,7 +212,32 @@ test('nao aceita provisionamento sem uma VLAN conhecida para a interface', () =>
         slotno: '17',
         ponno: '10',
       }),
-    /Nao encontrei uma VLAN valida/
+    /Nao encontrei uma VLAN comprovada/
+  );
+});
+
+test('Patrocinio usa VLAN comprovada em outras PONs do mesmo slot quando a PON esta vazia', () => {
+  const rows = [
+    { id_transmissor: '1', slotno: '15', ponno: '1', onu_numero: '1', vlan: '1015' },
+    { id_transmissor: '1', slotno: '15', ponno: '3', onu_numero: '2', vlan: '1015' },
+    { id_transmissor: '1', slotno: '15', ponno: '6', onu_numero: '3', vlan: '1020' },
+  ];
+  const result = deriveProvisionNetworkFields(rows, {
+    id_transmissor: '1', slotno: '15', ponno: '4',
+  });
+  assert.equal(result.vlan, '1015');
+  assert.equal(result.onu_numero, '1');
+  assert.equal(result.vlan_pppoe, '');
+});
+
+test('nao infere VLAN sem confirmacao em PONs diferentes do slot', () => {
+  const rows = [
+    { id_transmissor: '1', slotno: '15', ponno: '1', vlan: '1015' },
+    { id_transmissor: '1', slotno: '15', ponno: '2', vlan: '1020' },
+  ];
+  assert.throws(
+    () => deriveProvisionNetworkFields(rows, { id_transmissor: '1', slotno: '15', ponno: '4' }),
+    /Nao encontrei uma VLAN comprovada/
   );
 });
 

@@ -289,10 +289,25 @@ export const deriveProvisionNetworkFields = (rows, target) => {
       String(row.slotno) === String(target.slotno) &&
       String(row.ponno) === String(target.ponno)
   );
-  const reference = samePon.find((row) => positiveInteger(row.vlan));
+  let reference = samePon.find((row) => positiveInteger(row.vlan));
+  if (!reference && String(target.id_transmissor) === '1') {
+    const slot = positiveInteger(target.slotno);
+    const expectedVlan = slot && String(1000 + slot);
+    const confirmedPons = new Set(
+      rows
+        .filter((row) =>
+          String(row.id_transmissor) === '1' &&
+          String(row.slotno) === String(target.slotno) &&
+          String(row.vlan) === expectedVlan
+        )
+        .map((row) => String(row.ponno))
+        .filter(Boolean)
+    );
+    if (confirmedPons.size >= 2) reference = { vlan: expectedVlan };
+  }
   if (!reference) {
     throw new Error(
-      `Nao encontrei uma VLAN valida para OLT ${target.id_transmissor}, slot ${target.slotno}, PON ${target.ponno}. Libere a consulta da interface da OLT no usuario da API.`
+      `Nao encontrei uma VLAN comprovada para OLT ${target.id_transmissor}, slot ${target.slotno}, PON ${target.ponno}. Confira a interface da OLT e o acesso da API.`
     );
   }
 
