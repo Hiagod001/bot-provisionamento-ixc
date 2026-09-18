@@ -80,6 +80,26 @@ const resetSession = (ctx) => {
   return sessions.get(sessionKey(ctx));
 };
 
+const processingSteps = new Set([
+  'titularity_processing',
+  'router_replace_processing',
+  'provisioning',
+  'oldfiber_removing',
+  'swap_oldfiber_removing',
+]);
+
+export const claimProcessingStep = (state, expectedStep, processingStep) => {
+  if (state.step !== expectedStep) return false;
+  state.step = processingStep;
+  return true;
+};
+
+const answerBusyOrExpired = async (ctx, state) => {
+  await ctx.answerCbQuery(
+    processingSteps.has(state.step) ? 'Processo em andamento. Aguarde.' : 'Etapa expirada'
+  );
+};
+
 const isExpiredCallbackQueryError = (error) =>
   error?.code === 400 &&
   /query is too old|query id is invalid|response timeout expired/i.test(
@@ -909,6 +929,10 @@ export const registerFlow = (bot, ixc, config) => {
   });
 
   bot.command('cancelar', async (ctx) => {
+    if (processingSteps.has(getSession(ctx).step)) {
+      await ctx.reply('O processo ainda esta em andamento. Aguarde a confirmacao antes de iniciar outro.');
+      return;
+    }
     resetSession(ctx);
     await ctx.reply('Cancelado. Envie /provisionar para iniciar.');
   });
@@ -1036,11 +1060,11 @@ export const registerFlow = (bot, ixc, config) => {
 
   bot.action(/^routerreplace:confirm$/, async (ctx) => {
     const state = getSession(ctx);
-    if (state.step !== 'router_replace_confirm') {
-      await ctx.answerCbQuery('Etapa expirada');
+    if (!claimProcessingStep(state, 'router_replace_confirm', 'router_replace_processing')) {
+      await answerBusyOrExpired(ctx, state);
       return;
     }
-    await ctx.answerCbQuery('Confirmado');
+    await ctx.answerCbQuery('Processando. Aguarde.');
     await completeRouterReplacement(ctx, state, ixc, config);
   });
 
@@ -1112,13 +1136,14 @@ export const registerFlow = (bot, ixc, config) => {
 
   bot.action(/^oldfiber:delete$/, async (ctx) => {
     const state = getSession(ctx);
-    if (state.step !== 'oldfiber_confirm' || !state.oldFiber?.id) {
-      await ctx.answerCbQuery('Etapa expirada');
+    if (!state.oldFiber?.id || !claimProcessingStep(state, 'oldfiber_confirm', 'oldfiber_removing')) {
+      await answerBusyOrExpired(ctx, state);
       await ctx.reply('Etapa expirada. Envie /provisionar.');
       return;
     }
 
     await ctx.answerCbQuery('Removendo cadastro antigo');
+    await ctx.reply('Removendo o cadastro antigo da ONU. Aguarde a confirmacao antes de tentar novamente.');
     await ixc.removeAuthorizedOnu(state.oldFiber.id);
     console.log(`Cadastro de fibra antigo ${state.oldFiber.id} removido na mudanca de endereco.`);
 
@@ -1132,7 +1157,7 @@ export const registerFlow = (bot, ixc, config) => {
   bot.action(/^swapoldfiber:delete$/, async (ctx) => {
     const state = getSession(ctx);
     if (state.step !== 'swap_oldfiber_confirm' || !state.oldFiber?.id) {
-      await ctx.answerCbQuery('Etapa expirada');
+      await answerBusyOrExpired(ctx, state);
       await ctx.reply('Etapa expirada. Envie /provisionar.');
       return;
     }
@@ -1146,7 +1171,9 @@ export const registerFlow = (bot, ixc, config) => {
       return;
     }
 
+    state.step = 'swap_oldfiber_removing';
     await ctx.answerCbQuery('Removendo equipamento antigo');
+    await ctx.reply('Removendo o equipamento antigo. Aguarde a confirmacao antes de tentar novamente.');
     await ixc.removeAuthorizedOnu(oldFiber.id);
 
     const box = oldFiber.id_caixa_ftth ? await ixc.read('rad_caixa_ftth', oldFiber.id_caixa_ftth) : null;
@@ -1182,15 +1209,24 @@ export const registerFlow = (bot, ixc, config) => {
 
   bot.action(/^titularity:transfer$/, async (ctx) => {
     const state = getSession(ctx);
-    if (state.step !== 'titularity_confirm' || !state.oldFiber?.id || !state.contract?.id || !state.login?.id) {
-      await ctx.answerCbQuery('Etapa expirada');
-      await ctx.reply('Etapa expirada. Envie /provisionar.');
+    if (!state.oldFiber?.id || !state.contract?.id || !state.login?.id) {
+      await answerBusyOrExpired(ctx, state);
+      return;
+    }
+    if (!claimProcessingStep(state, 'titularity_confirm', 'titularity_processing')) {
+      await answerBusyOrExpired(ctx, state);
       return;
     }
 
-    await ctx.answerCbQuery('Transferindo titularidade');
-    await ctx.reply('Transferindo titularidade...');
-    await finishTitularityTransfer(ctx, state, ixc, config);
+    await ctx.answerCbQuery('Transferindo titularidade. Aguarde.');
+    await ctx.reply('Troca de titularidade em andamento. Aguarde a confirmacao; nao clique novamente.');
+    try {
+      await finishTitularityTransfer(ctx, state, ixc, config);
+    } catch (error) {
+      state.step = 'titularity_failed';
+      console.error('Troca de titularidade nao concluida:', error?.code || '', error?.message || error);
+      await ctx.reply('Nao consegui confirmar a troca de titularidade. Algumas etapas podem ter sido gravadas no IXC. Acione o NOC para conferir antes de tentar novamente.');
+    }
   });
 
   bot.action(/^box:/, async (ctx) => {
@@ -1279,10 +1315,17 @@ export const registerFlow = (bot, ixc, config) => {
     const accepted = action === 'confirm:yes' || action === 'confirm:retry';
     const expectedStep = action === 'confirm:retry' ? 'retry' : 'confirm';
 
+    if (processingSteps.has(state.step)) {
+      await ctx.answerCbQuery('Processo em andamento. Aguarde.');
+      return;
+    }
+
     if (accepted && state.step !== expectedStep) {
       await ctx.answerCbQuery('Esta tentativa ja expirou');
       return;
     }
+
+    if (accepted) state.step = 'provisioning';
 
     await ctx.answerCbQuery(
       action === 'confirm:retry' ? 'Tentando novamente' : accepted ? 'Confirmado' : 'Cancelado'
@@ -1303,7 +1346,7 @@ export const registerFlow = (bot, ixc, config) => {
       return;
     }
 
-    state.step = 'provisioning';
+    await ctx.reply('Provisionamento em andamento. Aguarde a confirmacao; nao clique novamente.');
     try {
       await activateContractWithWarning(ctx, state, ixc);
       const result = await ixc.provisionOnu(payload);
