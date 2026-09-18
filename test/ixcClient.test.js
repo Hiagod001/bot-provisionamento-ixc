@@ -23,6 +23,7 @@ import {
   registerFlow,
   sendProvisionSignal,
   selectTechnicianProfiles,
+  selectContractByNumber,
   validatePppoeCredentials,
 } from '../src/flow.js';
 import {
@@ -119,6 +120,26 @@ test('callback antigo do Telegram nao interrompe o fluxo', async () => {
     answerCallbackQuerySafely(async () => { throw Object.assign(new Error('Forbidden'), { code: 403 }); }),
     /Forbidden/
   );
+});
+
+test('numero digitado escolhe o contrato sem voltar ao inicio', () => {
+  const contracts = [{ id: '53848' }, { id: '40599' }, { id: '31955' }];
+  const state = { step: 'contract_choose', matches: contracts, menuToken: 'abc123' };
+  assert.equal(selectContractByNumber(state, '1'), contracts[0]);
+  assert.equal(state.contract.id, '53848');
+  assert.equal(state.step, 'login_lookup');
+  assert.deepEqual(state.matches, []);
+  assert.equal(state.menuToken, null);
+});
+
+test('numero de contrato invalido mantem o menu atual', () => {
+  const contracts = [{ id: '53848' }, { id: '40599' }];
+  for (const input of ['0', '3', '53848', 'abc']) {
+    const state = { step: 'contract_choose', matches: contracts, menuToken: 'abc123' };
+    assert.equal(selectContractByNumber(state, input), null);
+    assert.equal(state.step, 'contract_choose');
+    assert.deepEqual(state.matches, contracts);
+  }
 });
 
 const profiles = [

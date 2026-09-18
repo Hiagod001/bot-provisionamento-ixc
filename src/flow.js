@@ -130,6 +130,17 @@ export const currentMenuCallbackValue = (state, prefix, expectedStep, data) => {
   return callback.value;
 };
 
+export const selectContractByNumber = (state, text) => {
+  if (state.step !== 'contract_choose' || !/^[1-9]\d*$/.test(text)) return null;
+  const index = Number(text) - 1;
+  const contract = state.matches.slice(0, 10)[index];
+  if (!contract) return null;
+  state.contract = contract;
+  clearMenuChoices(state);
+  state.step = 'login_lookup';
+  return contract;
+};
+
 const ensureAllowed = (ctx, allowedIds) => {
   if (!allowedIds.length) return true;
   return allowedIds.includes(String(ctx.from?.id));
@@ -860,6 +871,14 @@ const askFreePortChoice = async (ctx, state, ixc) => {
 };
 
 export const registerFlow = (bot, ixc, config) => {
+  const continueAfterContractSelection = async (ctx, state) => {
+    if (state.serviceType === 'troca' && !isRouterReplacement(state)) {
+      await handleSwapAfterContractChoice(ctx, state, ixc);
+      return;
+    }
+    await askLoginForContract(ctx, state, ixc);
+  };
+
   bot.use(async (ctx, next) => {
     if (typeof ctx.answerCbQuery === 'function') {
       const originalAnswerCbQuery = ctx.answerCbQuery.bind(ctx);
@@ -1227,13 +1246,7 @@ export const registerFlow = (bot, ixc, config) => {
       `${formatContract(selected, state.client)}\n\nBuscando PPPoE...`
     );
     if (!contract) return;
-
-    if (state.serviceType === 'troca' && !isRouterReplacement(state)) {
-      await handleSwapAfterContractChoice(ctx, state, ixc);
-      return;
-    }
-
-    await askLoginForContract(ctx, state, ixc);
+    await continueAfterContractSelection(ctx, state);
   });
 
   bot.action(/^login:/, async (ctx) => {
@@ -1390,6 +1403,17 @@ export const registerFlow = (bot, ixc, config) => {
 
     if (state.step === 'service') {
       await askProvisionStart(ctx);
+      return;
+    }
+
+    if (state.step === 'contract_choose') {
+      const contract = selectContractByNumber(state, text);
+      if (!contract) {
+        await ctx.reply(`Escolha um contrato de 1 a ${Math.min(state.matches.length, 10)} pelos botoes ou digite o numero.`);
+        return;
+      }
+      await ctx.reply(`${formatContract(contract, state.client)}\n\nBuscando PPPoE...`);
+      await continueAfterContractSelection(ctx, state);
       return;
     }
 
@@ -1626,7 +1650,7 @@ export const registerFlow = (bot, ixc, config) => {
       return;
     }
 
-    await askProvisionStart(ctx);
+    await ctx.reply(mustChooseMessage);
   });
 };
 
