@@ -24,6 +24,24 @@ export const provisionedSignalKeyboard = () =>
     [Markup.button.callback('Conferir sinal', 'provisioned:signal')],
   ]);
 
+export const credentialsCopyKeyboard = (login, password) =>
+  Markup.inlineKeyboard([
+    [
+      {
+        text: 'Copiar PPPoE',
+        style: 'primary',
+        copy_text: { text: String(login || '') },
+      },
+    ],
+    [
+      {
+        text: 'Copiar senha',
+        style: 'primary',
+        copy_text: { text: String(password || '') },
+      },
+    ],
+  ]);
+
 export const serviceKeyboard = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('Instalacao', 'service:instalacao')],

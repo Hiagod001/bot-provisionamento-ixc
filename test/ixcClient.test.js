@@ -40,6 +40,7 @@ import {
 } from '../src/format.js';
 import {
   portsKeyboard,
+  credentialsCopyKeyboard,
   routerReplacementKeyboard,
   rowsKeyboard,
   signalResultKeyboard,
@@ -158,6 +159,22 @@ test('botao pos-provisionamento aguarda cinco segundos antes de consultar a ONU'
   const button = provisionedSignalKeyboard().reply_markup.inline_keyboard[0][0];
   assert.equal(button.text, 'Conferir sinal');
   assert.equal(button.callback_data, 'provisioned:signal');
+});
+
+test('botoes azuis copiam PPPoE e senha sem digitacao manual', () => {
+  const keyboard = credentialsCopyKeyboard('06759385624', '123456');
+  const [loginButton, passwordButton] = keyboard.reply_markup.inline_keyboard.flat();
+
+  assert.deepEqual(loginButton, {
+    text: 'Copiar PPPoE',
+    style: 'primary',
+    copy_text: { text: '06759385624' },
+  });
+  assert.deepEqual(passwordButton, {
+    text: 'Copiar senha',
+    style: 'primary',
+    copy_text: { text: '123456' },
+  });
 });
 
 test('iniciar e navegar pelos menus preserva o historico de mensagens', async () => {

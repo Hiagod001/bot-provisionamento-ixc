@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   confirmKeyboard,
+  credentialsCopyKeyboard,
   locationKeyboard,
   oldFiberKeyboard,
   onuConfirmationKeyboard,
@@ -751,8 +752,10 @@ const finishTitularityTransfer = async (ctx, state, ixc, config) => {
   };
   updatedFiber.caixa_nome ||= state.oldFiber?.caixa_nome || '';
 
-  await ctx.reply(buildTitularitySuccessMessage(state, updatedFiber));
-  const signal = await sendProvisionSignal(ctx, ixc, updatedFiber);
+  await ctx.reply(
+    buildTitularitySuccessMessage(state, updatedFiber),
+    credentialsCopyKeyboard(state.login?.login, state.login?.senha)
+  );
   if (config.ixc.os.enabled) {
     try {
       const osResult = await ixc.createAndCloseProvisioningOs({
@@ -760,7 +763,7 @@ const finishTitularityTransfer = async (ctx, state, ixc, config) => {
         contract: state.contract,
         login: state.login,
         fiberId: updatedFiber.id,
-        signal,
+        signal: null,
         box: updatedFiber.caixa_nome || 'Nome nao encontrado',
         port: updatedFiber.porta_ftth,
         serial: updatedFiber.mac,
@@ -781,7 +784,12 @@ const finishTitularityTransfer = async (ctx, state, ixc, config) => {
   if (state.macCleanupWarning) {
     await ctx.reply(`Aviso: verifique manualmente a limpeza do MAC do login antigo. Motivo: ${state.macCleanupWarning}`);
   }
-  resetSession(ctx);
+  state.provisionedOnu = updatedFiber;
+  state.step = 'provisioned_signal_ready';
+  await ctx.reply(
+    'Quando a OLT e o IXC terminarem de sincronizar, clique abaixo para conferir o sinal.',
+    provisionedSignalKeyboard()
+  );
 };
 
 const enrichCityNames = async (ixc, records) => {
@@ -1008,8 +1016,8 @@ export const registerFlow = (bot, ixc, config) => {
       return;
     }
 
-    await ctx.answerCbQuery('Aguardando sincronizacao.');
-    await ctx.reply('Aguarde 5 segundos. Depois vou consultar o sinal desta ONU.');
+    await ctx.answerCbQuery('Aguardando sincronizacao da ONU.');
+    await ctx.reply('Aguardando sincronização da ONU. A medição começará em 5 segundos.');
     await sendDelayedProvisionSignal(ctx, ixc, state.provisionedOnu);
     resetSession(ctx);
   });
@@ -1433,7 +1441,10 @@ export const registerFlow = (bot, ixc, config) => {
     try {
       await activateContractWithWarning(ctx, state, ixc);
       const result = await ixc.provisionOnu(payload);
-      await ctx.reply(buildProvisionSuccessMessage(state, result.provisionedOnu));
+      await ctx.reply(
+        buildProvisionSuccessMessage(state, result.provisionedOnu),
+        credentialsCopyKeyboard(state.login?.login, state.login?.senha)
+      );
       if (config.ixc.os.enabled) {
         try {
           const osResult = await ixc.createAndCloseProvisioningOs({
