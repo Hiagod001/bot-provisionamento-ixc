@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   IxcClient,
+  isImportProjectBox,
   buildProvisionOsMessage,
   buildRouterReplacementOsMessage,
   deriveProvisionNetworkFields,
@@ -778,6 +779,34 @@ test('busca por localizacao mostra somente caixas VRJ do projeto Importacao', as
   assert.deepEqual(boxes.map((box) => box.id), ['1']);
 });
 
+test('qualquer caixa de provisionamento deve pertencer ao Projeto importacao', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.listAllBoxes = async () => [
+    { id: '1', descricao: 'PMS - IMPORTACAO', id_projeto: '1', status: 'A', latitude: '-18.58', longitude: '-46.51' },
+    { id: '2', descricao: 'PMS - OUTRO PROJETO', id_projeto: '22', status: 'A', latitude: '-18.58', longitude: '-46.51' },
+    { id: '3', descricao: 'PMS - IMPORTACAO INATIVA', id_projeto: '1', status: 'I', latitude: '-18.58', longitude: '-46.51' },
+  ];
+
+  const boxes = await client.findBoxesNearLocation(
+    { latitude: -18.58, longitude: -46.51 },
+    { radiusMeters: 300, limit: 10 }
+  );
+
+  assert.deepEqual(boxes.map((box) => box.id), ['1']);
+  assert.equal(isImportProjectBox(boxes[0]), true);
+});
+
+test('busca digitada tambem exclui caixas de outros projetos', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.list = async () => [
+    { id: '1', descricao: 'PMS - IMPORTACAO', id_projeto: '1', id_transmissor: '2', status: 'A' },
+    { id: '2', descricao: 'PMS - OUTRO PROJETO', id_projeto: '22', id_transmissor: '2', status: 'A' },
+  ];
+
+  const boxes = await client.findBoxes('PMS', '2');
+  assert.deepEqual(boxes.map((box) => box.id), ['1']);
+});
+
 test('busca por localizacao de Paracatu mostra somente caixas PTU da OLT e projeto Importacao', async () => {
   const client = Object.create(IxcClient.prototype);
   client.listAllBoxes = async () => [
@@ -857,6 +886,13 @@ test('provisionamento grava explicitamente o projeto da caixa escolhida', () => 
 
   assert.equal(payload.clienteFibra.id_caixa_ftth, '10');
   assert.equal(payload.clienteFibra.id_projeto, '1');
+});
+
+test('provisionamento bloqueia caixa de outro projeto mesmo se chegar ao payload', () => {
+  assert.throws(
+    () => buildProvisionPayload({ box: { id: '10', id_projeto: '38' } }),
+    /Projeto importacao/
+  );
 });
 
 test('relatorio de sinal mantem ONU offline sem interromper as outras consultas', async () => {

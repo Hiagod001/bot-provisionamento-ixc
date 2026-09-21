@@ -847,9 +847,14 @@ const selectByCallback = async (ctx, prefix, expectedStep, field, nextStep, next
   return selected;
 };
 
-export const buildProvisionPayload = (state) => ({
-  pendingOnuId: state.onu?.id,
-  clienteFibra: {
+export const buildProvisionPayload = (state) => {
+  if (String(state.box?.id_projeto || '') !== '1') {
+    throw new Error('A caixa escolhida nao pertence ao Projeto importacao. Selecione outra caixa.');
+  }
+
+  return {
+    pendingOnuId: state.onu?.id,
+    clienteFibra: {
     radpop_estrutura: 'N',
     id_transmissor: short(state.olt?.id || state.onu?.id_olt, ''),
     id_caixa_ftth: short(state.box?.id, ''),
@@ -874,8 +879,9 @@ export const buildProvisionPayload = (state) => ({
     porta_web_onu_cliente: '80',
     tipo_autenticacao: 'MAC',
     endereco_padrao_cliente: 'S',
-  },
-});
+    },
+  };
+};
 
 const loadOlt = async (state, ixc) => {
   if (state.olt) return;
@@ -1240,6 +1246,16 @@ export const registerFlow = (bot, ixc, config) => {
     await ixc.removeAuthorizedOnu(oldFiber.id);
 
     const box = oldFiber.id_caixa_ftth ? await ixc.read('rad_caixa_ftth', oldFiber.id_caixa_ftth) : null;
+    if (String(box?.id_projeto || '') !== '1') {
+      state.box = null;
+      state.dropPort = null;
+      state.oldFiber = null;
+      console.log(`Caixa antiga ${oldFiber.id_caixa_ftth} fora do Projeto importacao; solicitando nova caixa.`);
+      await clearLoginMacWithWarning(ctx, state, ixc);
+      await ctx.reply('A caixa antiga nao pertence ao Projeto importacao. Envie a localizacao para escolher uma caixa valida.');
+      await askBoxLocation(ctx, state);
+      return;
+    }
     state.box = box || {
       id: oldFiber.id_caixa_ftth,
       descricao: 'Caixa sem nome',
@@ -1332,6 +1348,10 @@ export const registerFlow = (bot, ixc, config) => {
     }
     if (state.serviceType === 'mudanca' && state.login?.id) {
       await clearLoginMacWithWarning(ctx, state, ixc);
+      await askProfile(ctx, state, ixc);
+      return;
+    }
+    if (state.serviceType === 'troca' && state.login?.id) {
       await askProfile(ctx, state, ixc);
       return;
     }

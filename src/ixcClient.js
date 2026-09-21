@@ -357,19 +357,24 @@ const distanceMeters = (from, to) => {
   return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
+export const IMPORT_PROJECT_ID = '1';
+export const isImportProjectBox = (box) =>
+  String(box?.id_projeto || '') === IMPORT_PROJECT_ID;
+
 const isBoxAvailableForLocation = (box) => {
   const description = String(box?.descricao || box?.nome || '').trim();
+  if (!isImportProjectBox(box) || box?.status !== 'A') return false;
   if (/^VRJ(?:\s*-|\s|$)/i.test(description)) {
-    return String(box?.id_projeto) === '1';
+    return true;
   }
   if (/^PTU(?:\s*-|\s|$)/i.test(description)) {
-    return String(box?.id_projeto) === '1' && String(box?.id_transmissor) === '5';
+    return String(box?.id_transmissor) === '5';
   }
   if (/^PTC(?:\s*-|\s|$)/i.test(description)) {
-    return String(box?.id_projeto) === '1' && String(box?.id_transmissor) === '1';
+    return String(box?.id_transmissor) === '1';
   }
   if (/^PARACATU(?:\s*-|\s|$)/i.test(description)) return false;
-  return box?.status === 'A';
+  return true;
 };
 
 export class IxcClient {
@@ -683,8 +688,12 @@ export class IxcClient {
       sortorder: 'asc',
     });
 
-    if (!oltId) return rows;
-    return rows.filter((box) => !box.id_transmissor || String(box.id_transmissor) === String(oltId));
+    return rows.filter(
+      (box) =>
+        isImportProjectBox(box) &&
+        box.status === 'A' &&
+        (!oltId || !box.id_transmissor || String(box.id_transmissor) === String(oltId))
+    );
   }
 
   async findBoxesNearLocation(location, { radiusMeters = 300, limit = 10 } = {}) {
