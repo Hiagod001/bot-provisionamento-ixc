@@ -15,6 +15,7 @@ import {
   claimProcessingStep,
   clearLoginMacWithWarning,
   findExistingTitularityProfile,
+  filterContractsForService,
   formatNearbyBoxLabel,
   handleSwapAfterContractChoice,
   POST_PROVISION_SIGNAL_DELAY_MS,
@@ -65,6 +66,40 @@ test('etapa critica pode ser assumida somente uma vez', () => {
   assert.equal(
     claimProcessingStep(state, 'titularity_confirm', 'titularity_processing'),
     false
+  );
+});
+
+test('instalacao mostra somente contratos em pre-ativacao', () => {
+  const contracts = [
+    { id: '1', status: 'P' },
+    { id: '2', status: 'A' },
+    { id: '3', status: 'D' },
+    { id: '4', status: 'I' },
+    { id: '5', status: 'C' },
+  ];
+
+  assert.deepEqual(
+    filterContractsForService(contracts, 'instalacao').map((contract) => contract.id),
+    ['1']
+  );
+});
+
+test('contratos cancelados e inativos nao aparecem em outros fluxos', () => {
+  const contracts = [
+    { id: '1', status: 'P' },
+    { id: '2', status: 'A' },
+    { id: '3', status: 'D' },
+    { id: '4', status: 'I' },
+    { id: '5', status: 'C' },
+  ];
+
+  assert.deepEqual(
+    filterContractsForService(contracts, 'troca').map((contract) => contract.id),
+    ['1', '2']
+  );
+  assert.deepEqual(
+    filterContractsForService(contracts, 'signal').map((contract) => contract.id),
+    ['2']
   );
 });
 

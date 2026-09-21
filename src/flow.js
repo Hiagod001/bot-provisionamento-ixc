@@ -487,6 +487,24 @@ const isContractActive = (contract) => {
   return status === 'A' || status === 'ATIVO' || status === 'ACTIVE';
 };
 
+const isContractPreActivation = (contract) => {
+  const status = normalizeContractStatus(contract?.status);
+  return [
+    'P',
+    'PRE ATIVACAO',
+    'PRE-ATIVACAO',
+    'PRE ATIVO',
+    'PRE-ATIVO',
+  ].includes(status);
+};
+
+export const filterContractsForService = (contracts, serviceType) => {
+  const rows = Array.isArray(contracts) ? contracts : [];
+  if (serviceType === 'instalacao') return rows.filter(isContractPreActivation);
+  if (serviceType === 'signal') return rows.filter(isContractActive);
+  return rows.filter((contract) => isContractActive(contract) || isContractPreActivation(contract));
+};
+
 const isTransientIxcError = (error) =>
   ['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN'].includes(error?.code);
 
@@ -1518,11 +1536,14 @@ export const registerFlow = (bot, ixc, config) => {
       }
 
       state.client = client;
-      const contracts = await ixc.findContractsByClient(text);
+      const contracts = filterContractsForService(
+        await ixc.findContractsByClient(text),
+        'signal'
+      );
       if (!contracts.length) {
         resetSession(ctx);
         await ctx.reply(
-          `${short(client.razao)}\nNao possui contratos cadastrados.`,
+          `${short(client.razao)}\nNao possui contratos ativos.`,
           signalResultKeyboard()
         );
         return;
@@ -1673,9 +1694,16 @@ export const registerFlow = (bot, ixc, config) => {
       }
 
       state.client = client;
-      const contracts = await ixc.findContractsByClient(text);
+      const contracts = filterContractsForService(
+        await ixc.findContractsByClient(text),
+        state.serviceType
+      );
       if (!contracts.length) {
-        await ctx.reply(`${short(client.razao)}\nSem contratos encontrados.`);
+        await ctx.reply(
+          state.serviceType === 'instalacao'
+            ? `${short(client.razao)}\nSem contratos em pre-ativacao.`
+            : `${short(client.razao)}\nSem contratos ativos ou em pre-ativacao.`
+        );
         return;
       }
 

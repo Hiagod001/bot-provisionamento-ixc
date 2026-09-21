@@ -781,7 +781,7 @@ export class IxcClient {
       qtype: 'cliente_contrato.id_cliente',
       query: String(clientId),
       oper: '=',
-      rp: '20',
+      rp: '100',
       sortname: 'cliente_contrato.id',
       sortorder: 'desc',
     });
