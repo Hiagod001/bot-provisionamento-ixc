@@ -11,6 +11,7 @@ import {
 } from '../src/ixcClient.js';
 import {
   answerCallbackQuerySafely,
+  buildSerialRequestMessage,
   buildProvisionPayload,
   claimProcessingStep,
   clearLoginMacWithWarning,
@@ -67,6 +68,15 @@ test('etapa critica pode ser assumida somente uma vez', () => {
     claimProcessingStep(state, 'titularity_confirm', 'titularity_processing'),
     false
   );
+});
+
+test('troca de ONU pede explicitamente o serial do novo equipamento', () => {
+  const message = buildSerialRequestMessage({
+    serviceType: 'troca',
+    swapEquipment: 'onu',
+  });
+
+  assert.match(message, /SN do NOVO EQUIPAMENTO/);
 });
 
 test('instalacao mostra somente contratos em pre-ativacao', () => {

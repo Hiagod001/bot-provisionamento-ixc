@@ -257,13 +257,18 @@ const askRouterReplacementConfirmation = async (ctx, state) => {
   );
 };
 
-const askSerial = async (ctx, state) => {
-  state.step = 'serial';
-  const message = [
+export const buildSerialRequestMessage = (state) =>
+  [
     serviceLabel(state.serviceType),
     '',
-    'Para identificar a ONU, digite no minimo 4 caracteres do campo SN mostrado na foto.',
+    state.serviceType === 'troca' && state.swapEquipment === 'onu'
+      ? 'Digite no minimo 4 caracteres do campo SN do NOVO EQUIPAMENTO mostrado na foto.'
+      : 'Para identificar a ONU, digite no minimo 4 caracteres do campo SN mostrado na foto.',
   ].join('\n');
+
+const askSerial = async (ctx, state) => {
+  state.step = 'serial';
+  const message = buildSerialRequestMessage(state);
 
   try {
     await ctx.replyWithPhoto({ source: serialGuideImagePath }, { caption: message });
