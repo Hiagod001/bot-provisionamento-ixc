@@ -12,6 +12,7 @@ import {
 import {
   answerCallbackQuerySafely,
   buildProvisionPayload,
+  claimProcessingStep,
   clearLoginMacWithWarning,
   findExistingTitularityProfile,
   formatNearbyBoxLabel,
@@ -49,6 +50,20 @@ Status potencia: Regular
 INFORMACOES ADICIONAIS:
 Tx olt: 2.29
 Rx olt: -26.58`;
+
+test('etapa critica pode ser assumida somente uma vez', () => {
+  const state = { step: 'titularity_confirm' };
+
+  assert.equal(
+    claimProcessingStep(state, 'titularity_confirm', 'titularity_processing'),
+    true
+  );
+  assert.equal(state.step, 'titularity_processing');
+  assert.equal(
+    claimProcessingStep(state, 'titularity_confirm', 'titularity_processing'),
+    false
+  );
+});
 
 test('Huawei interpreta os tres sinais sem inverter TX da ONU e RX da OLT', () => {
   const signal = parseOnuPowerSummary(huaweiReport);

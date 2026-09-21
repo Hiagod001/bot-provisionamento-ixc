@@ -591,10 +591,15 @@ const continueAfterValidatedPppoe = async (ctx, state, ixc) => {
 };
 
 export const completeRouterReplacement = async (ctx, state, ixc, config) => {
-  if (state.step !== 'router_replace_confirm' || !isRouterReplacement(state)) {
+  if (
+    !['router_replace_confirm', 'router_replace_processing'].includes(state.step) ||
+    !isRouterReplacement(state)
+  ) {
     await ctx.reply('Etapa expirada. Envie /provisionar.');
     return false;
   }
+
+  state.step = 'router_replace_processing';
 
   if (config.dryRun) {
     resetSession(ctx);
@@ -1136,9 +1141,13 @@ export const registerFlow = (bot, ixc, config) => {
 
   bot.action(/^oldfiber:delete$/, async (ctx) => {
     const state = getSession(ctx);
-    if (!state.oldFiber?.id || !claimProcessingStep(state, 'oldfiber_confirm', 'oldfiber_removing')) {
+    if (!state.oldFiber?.id) {
       await answerBusyOrExpired(ctx, state);
       await ctx.reply('Etapa expirada. Envie /provisionar.');
+      return;
+    }
+    if (!claimProcessingStep(state, 'oldfiber_confirm', 'oldfiber_removing')) {
+      await answerBusyOrExpired(ctx, state);
       return;
     }
 
@@ -1156,9 +1165,13 @@ export const registerFlow = (bot, ixc, config) => {
 
   bot.action(/^swapoldfiber:delete$/, async (ctx) => {
     const state = getSession(ctx);
-    if (state.step !== 'swap_oldfiber_confirm' || !state.oldFiber?.id) {
+    if (!state.oldFiber?.id) {
       await answerBusyOrExpired(ctx, state);
       await ctx.reply('Etapa expirada. Envie /provisionar.');
+      return;
+    }
+    if (!claimProcessingStep(state, 'swap_oldfiber_confirm', 'swap_oldfiber_removing')) {
+      await answerBusyOrExpired(ctx, state);
       return;
     }
 
@@ -1171,7 +1184,6 @@ export const registerFlow = (bot, ixc, config) => {
       return;
     }
 
-    state.step = 'swap_oldfiber_removing';
     await ctx.answerCbQuery('Removendo equipamento antigo');
     await ctx.reply('Removendo o equipamento antigo. Aguarde a confirmacao antes de tentar novamente.');
     await ixc.removeAuthorizedOnu(oldFiber.id);
