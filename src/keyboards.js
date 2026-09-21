@@ -19,6 +19,11 @@ export const signalResultKeyboard = () =>
     [Markup.button.callback('Menu', 'signal:menu')],
   ]);
 
+export const provisionedSignalKeyboard = () =>
+  Markup.inlineKeyboard([
+    [Markup.button.callback('Conferir sinal', 'provisioned:signal')],
+  ]);
+
 export const serviceKeyboard = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('Instalacao', 'service:instalacao')],

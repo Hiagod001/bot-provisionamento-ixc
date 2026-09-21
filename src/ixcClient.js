@@ -1269,25 +1269,10 @@ export class IxcClient {
     await this.authorizePendingOnu(prepared.pendingOnuId);
     await this.authorizeOnu(provisionedOnu.id);
     const confirmed = await this.read('radpop_radio_cliente_fibra', provisionedOnu.id);
-    let signal;
-    try {
-      signal = await this.getOnuPowerSummary(provisionedOnu.id, {
-        attempts: 10,
-        delayMs: 4000,
-      });
-    } catch (error) {
-      const confirmationError = new Error(
-        'A ONU foi cadastrada no IXC, mas ainda nao foi confirmada ativa na OLT. Nao finalize a instalacao; verifique o sinal e tente novamente.'
-      );
-      confirmationError.code = 'ONU_NOT_CONFIRMED_ON_OLT';
-      confirmationError.cause = error;
-      throw confirmationError;
-    }
 
     return {
       createResponse,
       provisionedOnu: confirmed || provisionedOnu,
-      signal,
       authorized: true,
     };
   }

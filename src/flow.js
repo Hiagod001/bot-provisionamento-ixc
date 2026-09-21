@@ -8,6 +8,7 @@ import {
   onuConfirmationKeyboard,
   portsKeyboard,
   provisionKeyboard,
+  provisionedSignalKeyboard,
   retryPppoeKeyboard,
   retryProvisionKeyboard,
   rowsKeyboard,
@@ -65,6 +66,7 @@ const newSession = () => ({
   contract: null,
   login: null,
   profile: null,
+  provisionedOnu: null,
 });
 
 const sessionKey = (ctx) => String(ctx.chat?.id);
@@ -84,6 +86,7 @@ const processingSteps = new Set([
   'titularity_processing',
   'router_replace_processing',
   'provisioning',
+  'provisioned_signal_loading',
   'oldfiber_removing',
   'swap_oldfiber_removing',
 ]);
@@ -796,6 +799,14 @@ export const sendProvisionSignal = async (ctx, ixc, fiber, confirmedSignal) => {
   return signal || null;
 };
 
+export const POST_PROVISION_SIGNAL_DELAY_MS = 5000;
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+export const sendDelayedProvisionSignal = async (ctx, ixc, fiber, waitFn = wait) => {
+  await waitFn(POST_PROVISION_SIGNAL_DELAY_MS);
+  return sendProvisionSignal(ctx, ixc, fiber);
+};
+
 const selectByCallback = async (ctx, prefix, expectedStep, field, nextStep, nextMessage) => {
   const state = getSession(ctx);
   const index = currentMenuCallbackValue(state, prefix, expectedStep, ctx.callbackQuery.data);
@@ -955,6 +966,23 @@ export const registerFlow = (bot, ixc, config) => {
   bot.action(/^signal:start$/, async (ctx) => {
     await ctx.answerCbQuery('Verificar sinal');
     await askSignalChoice(ctx);
+  });
+
+  bot.action(/^provisioned:signal$/, async (ctx) => {
+    const state = getSession(ctx);
+    if (!state.provisionedOnu?.id) {
+      await answerBusyOrExpired(ctx, state);
+      return;
+    }
+    if (!claimProcessingStep(state, 'provisioned_signal_ready', 'provisioned_signal_loading')) {
+      await answerBusyOrExpired(ctx, state);
+      return;
+    }
+
+    await ctx.answerCbQuery('Aguardando sincronizacao.');
+    await ctx.reply('Aguarde 5 segundos. Depois vou consultar o sinal desta ONU.');
+    await sendDelayedProvisionSignal(ctx, ixc, state.provisionedOnu);
+    resetSession(ctx);
   });
 
   bot.action(/^signal:/, async (ctx) => {
@@ -1363,7 +1391,6 @@ export const registerFlow = (bot, ixc, config) => {
       await activateContractWithWarning(ctx, state, ixc);
       const result = await ixc.provisionOnu(payload);
       await ctx.reply(buildProvisionSuccessMessage(state, result.provisionedOnu));
-      const signal = await sendProvisionSignal(ctx, ixc, result.provisionedOnu, result.signal);
       if (config.ixc.os.enabled) {
         try {
           const osResult = await ixc.createAndCloseProvisioningOs({
@@ -1371,7 +1398,7 @@ export const registerFlow = (bot, ixc, config) => {
             contract: state.contract,
             login: state.login,
             fiberId: result.provisionedOnu?.id,
-            signal,
+            signal: null,
             box: state.box?.descricao || state.box?.id,
             port: state.dropPort,
             serial: result.provisionedOnu?.mac || state.onu?.mac || state.onu?.Chassi,
@@ -1392,7 +1419,12 @@ export const registerFlow = (bot, ixc, config) => {
       if (state.macCleanupWarning) {
         await ctx.reply(`Aviso: confira a limpeza do MAC. ${state.macCleanupWarning}`);
       }
-      resetSession(ctx);
+      state.provisionedOnu = result.provisionedOnu;
+      state.step = 'provisioned_signal_ready';
+      await ctx.reply(
+        'Quando a OLT e o IXC terminarem de sincronizar, clique abaixo para conferir o sinal.',
+        provisionedSignalKeyboard()
+      );
     } catch (error) {
       console.error(
         'Provisionamento nao concluido:',

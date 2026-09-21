@@ -17,12 +17,14 @@ import {
   findExistingTitularityProfile,
   formatNearbyBoxLabel,
   handleSwapAfterContractChoice,
+  POST_PROVISION_SIGNAL_DELAY_MS,
   completeRouterReplacement,
   currentMenuCallbackValue,
   normalizeSerialFragment,
   parseMenuCallback,
   registerFlow,
   sendProvisionSignal,
+  sendDelayedProvisionSignal,
   selectTechnicianProfiles,
   selectContractByNumber,
   validatePppoeCredentials,
@@ -38,6 +40,7 @@ import {
   routerReplacementKeyboard,
   rowsKeyboard,
   signalResultKeyboard,
+  provisionedSignalKeyboard,
   swapEquipmentKeyboard,
 } from '../src/keyboards.js';
 
@@ -88,6 +91,27 @@ test('Huawei usa a mesma leitura no relatorio de clientes e no final do provisio
   assert.match(messages[0], /RX na ONU: -21.48 dBm/);
   assert.match(messages[0], /RX na OLT: -26.58 dBm/);
   assert.match(buildProvisionOsMessage({ signal }), /recebido na OLT \(RX\): -26.58 dBm/);
+});
+
+test('botao pos-provisionamento aguarda cinco segundos antes de consultar a ONU', async () => {
+  const events = [];
+  const ctx = { reply: async () => events.push('reply') };
+  const ixc = {
+    getOnuPowerSummary: async (id) => {
+      events.push(`signal:${id}`);
+      return { onuRxDbm: '-20.00' };
+    },
+  };
+
+  await sendDelayedProvisionSignal(ctx, ixc, { id: '50760' }, async (milliseconds) => {
+    events.push(`wait:${milliseconds}`);
+  });
+
+  assert.equal(POST_PROVISION_SIGNAL_DELAY_MS, 5000);
+  assert.deepEqual(events, ['wait:5000', 'signal:50760', 'reply']);
+  const button = provisionedSignalKeyboard().reply_markup.inline_keyboard[0][0];
+  assert.equal(button.text, 'Conferir sinal');
+  assert.equal(button.callback_data, 'provisioned:signal');
 });
 
 test('iniciar e navegar pelos menus preserva o historico de mensagens', async () => {
@@ -848,7 +872,7 @@ test('resultado de sinal mostra somente nova consulta e menu', () => {
   assert.equal(labels.includes('Provisionar'), false);
 });
 
-test('provisionamento executa o botao Autorizar ONU usando o ID do cliente fibra', async () => {
+test('provisionamento autoriza a ONU sem consultar o sinal automaticamente', async () => {
   const client = Object.create(IxcClient.prototype);
   const calls = [];
   client.prepareProvisionPayload = async () => ({
@@ -862,10 +886,7 @@ test('provisionamento executa o botao Autorizar ONU usando o ID do cliente fibra
   client.findProvisionedOnu = async () => ({ id: '50760', mac: 'ABC123' });
   client.authorizePendingOnu = async (id) => calls.push(['pending', id]);
   client.authorizeOnu = async (id) => calls.push(['olt', id]);
-  client.getOnuPowerSummary = async (id, options) => {
-    calls.push(['confirm-power', id, options.attempts]);
-    return { onuRxDbm: '-20.00', oltRxDbm: '-21.00' };
-  };
+  client.getOnuPowerSummary = async () => calls.push(['unexpected-power-query']);
   client.read = async () => ({ id: '50760', mac: 'ABC123' });
 
   const result = await client.provisionOnu({});
@@ -874,31 +895,8 @@ test('provisionamento executa o botao Autorizar ONU usando o ID do cliente fibra
     ['preflight'],
     ['pending', '1056'],
     ['olt', '50760'],
-    ['confirm-power', '50760', 10],
   ]);
   assert.equal(result.authorized, true);
-});
-
-test('provisionamento nao confirma sucesso sem validar a ONU ativa na OLT', async () => {
-  const client = Object.create(IxcClient.prototype);
-  client.prepareProvisionPayload = async () => ({
-    pendingOnuId: '1056',
-    clienteFibra: { mac: 'ABC123', id_login: '30', id_contrato: '20' },
-  });
-  client.ensureOnuAuthorizationApiAvailable = async () => {};
-  client.findFiberClientsByMac = async () => [];
-  client.findFiberClientsByLogin = async () => [];
-  client.create = async () => ({ id: '50760' });
-  client.findProvisionedOnu = async () => ({ id: '50760', mac: 'ABC123' });
-  client.authorizePendingOnu = async () => {};
-  client.authorizeOnu = async () => {};
-  client.read = async () => ({ id: '50760', mac: 'ABC123' });
-  client.getOnuPowerSummary = async () => { throw new Error('ONU Offline'); };
-
-  await assert.rejects(
-    () => client.provisionOnu({}),
-    (error) => error.code === 'ONU_NOT_CONFIRMED_ON_OLT' && /nao foi confirmada ativa na OLT/.test(error.message)
-  );
 });
 
 test('provisionamento remove cadastro de fibra duplicado silenciosamente e continua', async () => {
