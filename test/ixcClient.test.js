@@ -1361,27 +1361,21 @@ test('ONU autorizada usa consulta parcial pelo MAC', async () => {
   assert.equal(request.params.oper, 'L');
 });
 
-test('Consultar todas atualiza a fila separadamente para cada OLT ativa', async () => {
+test('Consultar todas atualiza a fila por uma unica chamada global do IXC', async () => {
   const client = Object.create(IxcClient.prototype);
   const calls = [];
-  client.list = async (resource, params = {}) => {
-    calls.push({ resource, params });
-    if (resource === 'radpop_radio') return [{ id: '7' }, { id: '1056' }];
-    const oltId = JSON.parse(params.grid_param)[0].P;
-    return [{ id: `onu-${oltId}`, mac: `SERIAL-${oltId}` }];
+  client.list = async (resource, params = {}, options = {}) => {
+    calls.push({ resource, params, options });
+    return [{ id: 'onu-7', mac: 'SERIAL-7' }, { id: 'onu-1056', mac: 'SERIAL-1056' }];
   };
 
   const rows = await client.listPendingOnus({ refresh: true });
 
   assert.deepEqual(rows.map((row) => row.id), ['onu-7', 'onu-1056']);
-  assert.equal(calls[0].resource, 'radpop_radio');
-  assert.deepEqual(
-    calls.slice(1).map((call) => JSON.parse(call.params.grid_param)[0]),
-    [
-      { TB: 'id_olt', OP: '=', P: '7' },
-      { TB: 'id_olt', OP: '=', P: '1056' },
-    ]
-  );
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].resource, 'fh_onu_nao_autorizadas');
+  assert.deepEqual(calls[0].params, {});
+  assert.deepEqual(calls[0].options, { timeoutMs: 60000, retryTransient: false });
 });
 
 test('consulta critica de OLT respeita timeout curto sem repetir automaticamente', async () => {
@@ -1402,50 +1396,14 @@ test('consulta critica de OLT respeita timeout curto sem repetir automaticamente
   assert.equal(calls, 1);
 });
 
-test('consulta de ONUs usa OLTs que responderam e sinaliza resultado parcial', async () => {
+test('falha de timeout no Consultar todas retorna orientacao clara', async () => {
   const client = Object.create(IxcClient.prototype);
-  client.list = async (resource, params = {}) => {
-    if (resource === 'radpop_radio') return [{ id: '1' }, { id: '2' }];
-    const oltId = JSON.parse(params.grid_param)[0].P;
-    if (oltId === '1') throw Object.assign(new Error('timeout'), { code: 'ECONNABORTED' });
-    return [{ id: 'onu-2', mac: 'SERIAL-2' }];
-  };
-
-  const rows = await client.listPendingOnus({ refresh: true });
-
-  assert.deepEqual([...rows], [{ id: 'onu-2', mac: 'SERIAL-2' }]);
-  assert.equal(rows.incomplete, true);
-});
-
-test('serial ausente em consulta parcial pede nova tentativa em vez de falso negativo', async () => {
-  const client = Object.create(IxcClient.prototype);
-  client.listPendingOnus = async () => {
-    const rows = [];
-    Object.defineProperty(rows, 'incomplete', { value: true });
-    return rows;
+  client.list = async () => {
+    throw Object.assign(new Error('timeout'), { code: 'ECONNABORTED' });
   };
 
   await assert.rejects(
-    () => client.findPendingOnusBySerialSuffix('ABC123'),
-    (error) => error.code === 'IXC_PARTIAL_OLT_LOOKUP' && /Algumas OLTs nao responderam/.test(error.message)
+    () => client.listPendingOnus(),
+    (error) => error.code === 'IXC_OLT_LOOKUP_TIMEOUT' && /Consultar todas/.test(error.message)
   );
-});
-
-test('Consultar todas usa transmissores dos clientes fibra quando radpop_radio nao esta liberado', async () => {
-  const client = Object.create(IxcClient.prototype);
-  const consulted = [];
-  client.list = async (resource, params = {}) => {
-    if (resource === 'radpop_radio') return [];
-    if (resource === 'radpop_radio_cliente_fibra') {
-      return [{ id_transmissor: '7' }, { id_transmissor: '1056' }];
-    }
-    if (!params.grid_param) return [];
-    const oltId = JSON.parse(params.grid_param)[0].P;
-    consulted.push(oltId);
-    return [];
-  };
-
-  await client.listPendingOnus({ refresh: true });
-
-  assert.deepEqual(consulted, ['7', '1056']);
 });
