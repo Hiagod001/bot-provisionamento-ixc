@@ -406,12 +406,13 @@ export class IxcClient {
     this.cityCache = new Map();
   }
 
-  async list(table, params = {}) {
+  async list(table, params = {}, { timeoutMs, retryTransient = true } = {}) {
     const shouldSkipParams =
       table === 'fh_onu_nao_autorizadas' && Object.keys(params).length === 0;
 
     const request = () => this.http.get(`/${table}`, {
       headers: { ixcsoft: 'listar' },
+      ...(timeoutMs ? { timeout: timeoutMs } : {}),
       data: shouldSkipParams
         ? undefined
         : {
@@ -428,7 +429,7 @@ export class IxcClient {
       response = await request();
     } catch (error) {
       const transientCodes = ['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN'];
-      if (!transientCodes.includes(error?.code)) throw error;
+      if (!retryTransient || !transientCodes.includes(error?.code)) throw error;
       console.warn(`IXC oscilou ao consultar ${table}; repetindo a leitura uma vez.`);
       response = await request();
     }
@@ -484,6 +485,14 @@ export class IxcClient {
     let rows = await this.listPendingOnus({ refresh: true });
     let matches = this.filterPendingOnusBySerialSuffix(rows, suffix);
 
+    if (!matches.length && rows.incomplete) {
+      const error = new Error(
+        'Algumas OLTs nao responderam em ate 10 segundos. Nao foi possivel confirmar o serial; aguarde e tente novamente.'
+      );
+      error.code = 'IXC_PARTIAL_OLT_LOOKUP';
+      throw error;
+    }
+
     if (!matches.length) {
       await new Promise((resolve) => setTimeout(resolve, 3000));
       rows = await this.listPendingOnus({ refresh: false });
@@ -494,26 +503,49 @@ export class IxcClient {
   }
 
   async listPendingOnus({ refresh = true } = {}) {
-    if (!refresh) return this.list('fh_onu_nao_autorizadas');
+    if (!refresh) {
+      return this.list(
+        'fh_onu_nao_autorizadas',
+        {},
+        { timeoutMs: 10000, retryTransient: false }
+      );
+    }
 
-    let olts = await this.list('radpop_radio', {
-      rp: '2000',
-      grid_param: JSON.stringify([
-        { TB: 'ativo', OP: '=', P: 'S' },
-      ]),
-    });
+    let olts = [];
+    try {
+      olts = await this.list(
+        'radpop_radio',
+        {
+          rp: '2000',
+          grid_param: JSON.stringify([{ TB: 'ativo', OP: '=', P: 'S' }]),
+        },
+        { timeoutMs: 10000, retryTransient: false }
+      );
+    } catch (error) {
+      console.warn(`IXC nao respondeu a lista de OLTs: ${error?.code || error?.message || error}`);
+    }
     if (!olts.length) {
-      const [fibers, cachedPending] = await Promise.all([
-        this.list('radpop_radio_cliente_fibra', {
-          qtype: 'radpop_radio_cliente_fibra.id',
-          query: '0',
-          oper: '>',
-          rp: '10000',
-          sortname: 'radpop_radio_cliente_fibra.id',
-          sortorder: 'desc',
-        }),
-        this.list('fh_onu_nao_autorizadas'),
+      const fallback = await Promise.allSettled([
+        this.list(
+          'radpop_radio_cliente_fibra',
+          {
+            qtype: 'radpop_radio_cliente_fibra.id',
+            query: '0',
+            oper: '>',
+            rp: '10000',
+            sortname: 'radpop_radio_cliente_fibra.id',
+            sortorder: 'desc',
+          },
+          { timeoutMs: 10000, retryTransient: false }
+        ),
+        this.list(
+          'fh_onu_nao_autorizadas',
+          {},
+          { timeoutMs: 10000, retryTransient: false }
+        ),
       ]);
+      const fibers = fallback[0].status === 'fulfilled' ? fallback[0].value : [];
+      const cachedPending = fallback[1].status === 'fulfilled' ? fallback[1].value : [];
       const ids = new Set([
         ...fibers.map((fiber) => fiber.id_transmissor),
         ...cachedPending.map((row) => normalizePendingOnu(row).id_olt),
@@ -528,16 +560,30 @@ export class IxcClient {
 
     const results = await Promise.allSettled(
       olts.map((olt) =>
-        this.list('fh_onu_nao_autorizadas', {
-          rp: '10000',
-          sortname: 'fh_onu_nao_autorizadas.id',
-          sortorder: 'asc',
-          grid_param: JSON.stringify([{ TB: 'id_olt', OP: '=', P: String(olt.id) }]),
-        })
+        this.list(
+          'fh_onu_nao_autorizadas',
+          {
+            rp: '10000',
+            sortname: 'fh_onu_nao_autorizadas.id',
+            sortorder: 'asc',
+            grid_param: JSON.stringify([{ TB: 'id_olt', OP: '=', P: String(olt.id) }]),
+          },
+          { timeoutMs: 10000, retryTransient: false }
+        )
       )
     );
     const successful = results.filter((result) => result.status === 'fulfilled');
-    if (!successful.length) throw results[0].reason;
+    const failedCount = results.length - successful.length;
+    if (!successful.length) {
+      const error = new Error(
+        'O IXC nao respondeu a consulta das OLTs em ate 10 segundos. Aguarde um pouco e tente novamente.'
+      );
+      error.code = 'IXC_OLT_LOOKUP_TIMEOUT';
+      throw error;
+    }
+    if (failedCount) {
+      console.warn(`${failedCount} OLT(s) nao responderam em 10 segundos; usando as demais.`);
+    }
 
     const unique = new Map();
     for (const result of successful) {
@@ -546,7 +592,11 @@ export class IxcClient {
         unique.set(key, row);
       }
     }
-    return [...unique.values()];
+    const rows = [...unique.values()];
+    if (failedCount) {
+      Object.defineProperty(rows, 'incomplete', { value: true });
+    }
+    return rows;
   }
 
   filterPendingOnusBySerialSuffix(rows, suffix) {

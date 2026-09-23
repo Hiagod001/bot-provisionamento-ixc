@@ -1384,6 +1384,53 @@ test('Consultar todas atualiza a fila separadamente para cada OLT ativa', async 
   );
 });
 
+test('consulta critica de OLT respeita timeout curto sem repetir automaticamente', async () => {
+  const client = Object.create(IxcClient.prototype);
+  let calls = 0;
+  client.http = {
+    get: async (_path, options) => {
+      calls += 1;
+      assert.equal(options.timeout, 10000);
+      throw Object.assign(new Error('timeout'), { code: 'ECONNABORTED' });
+    },
+  };
+
+  await assert.rejects(
+    () => client.list('fh_onu_nao_autorizadas', {}, { timeoutMs: 10000, retryTransient: false }),
+    /timeout/
+  );
+  assert.equal(calls, 1);
+});
+
+test('consulta de ONUs usa OLTs que responderam e sinaliza resultado parcial', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.list = async (resource, params = {}) => {
+    if (resource === 'radpop_radio') return [{ id: '1' }, { id: '2' }];
+    const oltId = JSON.parse(params.grid_param)[0].P;
+    if (oltId === '1') throw Object.assign(new Error('timeout'), { code: 'ECONNABORTED' });
+    return [{ id: 'onu-2', mac: 'SERIAL-2' }];
+  };
+
+  const rows = await client.listPendingOnus({ refresh: true });
+
+  assert.deepEqual([...rows], [{ id: 'onu-2', mac: 'SERIAL-2' }]);
+  assert.equal(rows.incomplete, true);
+});
+
+test('serial ausente em consulta parcial pede nova tentativa em vez de falso negativo', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.listPendingOnus = async () => {
+    const rows = [];
+    Object.defineProperty(rows, 'incomplete', { value: true });
+    return rows;
+  };
+
+  await assert.rejects(
+    () => client.findPendingOnusBySerialSuffix('ABC123'),
+    (error) => error.code === 'IXC_PARTIAL_OLT_LOOKUP' && /Algumas OLTs nao responderam/.test(error.message)
+  );
+});
+
 test('Consultar todas usa transmissores dos clientes fibra quando radpop_radio nao esta liberado', async () => {
   const client = Object.create(IxcClient.prototype);
   const consulted = [];
