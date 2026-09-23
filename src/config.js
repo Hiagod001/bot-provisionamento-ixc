@@ -29,6 +29,7 @@ export const config = {
     baseUrl: required('IXC_BASE_URL').replace(/\/+$/, ''),
     token: required('IXC_TOKEN'),
     selfSigned: parseBoolean(process.env.IXC_SELF_SIGNED, true),
+    pendingOltIds: parseAllowedIds(process.env.IXC_PENDING_OLT_IDS),
     os: {
       enabled: parseBoolean(process.env.IXC_OS_ENABLED, true),
       subjectId: optional('IXC_OS_SUBJECT_ID') || '7',

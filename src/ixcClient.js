@@ -2,6 +2,7 @@ import axios from 'axios';
 import https from 'node:https';
 
 const normalizeToken = (token) => (token.startsWith('Basic ') ? token : `Basic ${token}`);
+const pendingOltModels = ['HW', 'FH', 'ZTE', 'DC', 'HW2', 'FKG', 'FK', 'INB', 'DIG', 'NK', 'FBT', 'FKWGL', 'VSOL', 'RAISE', 'FB6001', 'ZYXEL', 'FKC', 'CIAGPON', 'ZTEC610', 'VSOLGPON', 'PK', 'PHYHOME', '2FLEX', 'INTELBRASG16', 'TPLINK', 'SMARTOLT', 'TH', 'TPLINKP700X'];
 
 const dataRows = (response) => {
   const data = response?.data;
@@ -378,7 +379,8 @@ const isBoxAvailableForLocation = (box) => {
 };
 
 export class IxcClient {
-  constructor({ baseUrl, token, selfSigned = true, os = {} }) {
+  constructor({ baseUrl, token, selfSigned = true, os = {}, pendingOltIds = [] }) {
+    this.pendingOltIds = [...new Set(pendingOltIds.map(String).filter((id) => /^[1-9]\d*$/.test(id)))];
     this.os = {
       enabled: os.enabled !== false,
       subjectId: String(os.subjectId || '7'),
@@ -406,7 +408,7 @@ export class IxcClient {
     this.cityCache = new Map();
   }
 
-  async list(table, params = {}, { timeoutMs, retryTransient = true } = {}) {
+  async list(table, params = {}, { timeoutMs, retryTransient = true, strictResponse = false } = {}) {
     const shouldSkipParams =
       table === 'fh_onu_nao_autorizadas' && Object.keys(params).length === 0;
 
@@ -432,6 +434,17 @@ export class IxcClient {
       if (!retryTransient || !transientCodes.includes(error?.code)) throw error;
       console.warn(`IXC oscilou ao consultar ${table}; repetindo a leitura uma vez.`);
       response = await request();
+    }
+    if (strictResponse) {
+      // A grid do IXC usa type:error tambem para uma OLT consultada sem ONUs.
+      if (table === 'fh_onu_nao_autorizadas' && response.data?.type === 'error'
+          && Number(response.data?.total) === 0
+          && /^nenhuma onu disponivel\.?$/i.test(String(response.data?.message || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim())) return [];
+      assertNotIxcError(response.data, `consultar ${table}`);
+      const data = response.data;
+      if (![data, data?.rows, data?.registros, data?.data].some(Array.isArray)) {
+        throw new Error(`Resposta invalida ao consultar ${table}.`);
+      }
     }
     return dataRows(response);
   }
@@ -483,28 +496,67 @@ export class IxcClient {
   async findPendingOnusBySerialSuffix(serialSuffix) {
     const suffix = String(serialSuffix).trim();
     const rows = await this.listPendingOnus({ refresh: true });
-    return this.filterPendingOnusBySerialSuffix(rows, suffix);
+    const matches = this.filterPendingOnusBySerialSuffix(rows, suffix);
+    console.info(JSON.stringify({ event: 'onu_search', at: new Date().toISOString(), suffix: suffix.slice(-4), matches: matches.length, rows: rows.length, failedOlts: rows.failedOlts || [] }));
+    if (!matches.length && rows.failedOlts?.length) {
+      throw new Error('A consulta de algumas OLTs nao terminou. Nao foi possivel confirmar esse serial. Aguarde e tente novamente.');
+    }
+    return matches;
   }
 
   async listPendingOnus() {
+    // Compartilha apenas a consulta em andamento, nunca uma fila antiga.
+    if (this.pendingOnuRefresh) return this.pendingOnuRefresh;
+    const refresh = this.refreshPendingOnus();
+    this.pendingOnuRefresh = refresh;
+    try { return await refresh; }
+    finally { if (this.pendingOnuRefresh === refresh) this.pendingOnuRefresh = null; }
+  }
+
+  async refreshPendingOnus() {
+    const started = Date.now();
+    const deadline = started + 60000;
+    let ids;
     try {
-      // Sem filtros, o endpoint executa a mesma acao do botao "Consultar todas"
-      // do IXC e devolve a fila atualizada de todas as OLTs.
-      return await this.list(
-        'fh_onu_nao_autorizadas',
-        {},
-        { timeoutMs: 60000, retryTransient: false }
-      );
+      const olts = await this.list('radpop_radio', {
+        rp: '2000',
+        grid_param: JSON.stringify([
+          { TB: 'fabricante_modelo', OP: 'IN', P: pendingOltModels.map((model) => `'${model}'`).join(',') },
+          { TB: 'ativo', OP: '=', P: 'S' },
+        ]),
+      }, { timeoutMs: 8000, retryTransient: false, strictResponse: true });
+      ids = olts.filter((olt) => olt.ativo === 'S' && pendingOltModels.includes(olt.fabricante_modelo)).map((olt) => String(olt.id));
+      if (!ids.length) throw new Error('Lista de OLTs vazia');
     } catch (error) {
-      if (['ECONNABORTED', 'ETIMEDOUT'].includes(error?.code)) {
-        const timeoutError = new Error(
-          'O IXC demorou para concluir o Consultar todas. Aguarde um pouco e tente novamente.'
-        );
-        timeoutError.code = 'IXC_OLT_LOOKUP_TIMEOUT';
-        throw timeoutError;
-      }
-      throw error;
+      ids = this.pendingOltIds || [];
+      console.warn(JSON.stringify({ event: 'onu_discovery_fallback', at: new Date().toISOString(), configuredOlts: ids.length }));
+      if (!ids.length) throw new Error('Nao foi possivel listar as OLTs. O NOC precisa configurar a lista de OLTs para consulta no bot.');
     }
+    ids = [...new Set(ids)].filter((id) => /^[1-9]\d*$/.test(id));
+    const rows = [];
+    const failedOlts = [];
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < ids.length) {
+        const id = ids[cursor++];
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) { failedOlts.push(id); continue; }
+        try {
+          const result = await this.list('fh_onu_nao_autorizadas', {
+            page: 1, rp: 10000, sortname: '', sortorder: 'asc', query: '', qtype: '', oper: 'L',
+            grid_param: JSON.stringify([{ TB: 'id_olt', OP: '=', P: id }]), grid_param2: false,
+          }, { timeoutMs: Math.min(15000, remaining), retryTransient: false, strictResponse: true });
+          rows.push(...result);
+        } catch (error) {
+          failedOlts.push(id);
+          console.warn(JSON.stringify({ event: 'onu_olt_failed', at: new Date().toISOString(), olt: id, code: error?.code || 'IXC_RESPONSE_ERROR' }));
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, ids.length) }, worker));
+    console.info(JSON.stringify({ event: 'onu_refresh', at: new Date().toISOString(), olts: ids.length, failedOlts, rows: rows.length, durationMs: Date.now() - started }));
+    Object.defineProperty(rows, 'failedOlts', { value: failedOlts });
+    return rows;
   }
 
   filterPendingOnusBySerialSuffix(rows, suffix) {

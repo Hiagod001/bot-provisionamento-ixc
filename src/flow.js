@@ -1626,7 +1626,7 @@ export const registerFlow = (bot, ixc, config) => {
           ? 'Buscando ONU cadastrada...'
           : state.serviceType === 'mudanca'
             ? 'Verificando cadastro da ONU...'
-          : 'Buscando ONU na fila...'
+          : 'Consultando as ONUs em todas as OLTs. Aguarde a conclusao antes de enviar novamente.'
       );
       state.serialSuffix = serial;
 

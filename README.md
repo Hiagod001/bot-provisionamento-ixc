@@ -12,6 +12,10 @@ Bot em Node.js para guiar o tecnico pelo provisionamento de ONU no IXC Provedor.
 
 ## Fluxo do tecnico
 
+A busca de ONUs atualiza cada OLT ativa homologada, com ate tres consultas simultaneas e prazo total de 60 segundos. A listagem global sem filtros pode conter uma fila anterior e nao substitui essa atualizacao. Se a API negar acesso a `radpop_radio`, configure `IXC_PENDING_OLT_IDS` com os IDs conferidos na tela **Autorizar ONUs > Consultar por OLT**; revise essa lista ao adicionar, remover ou desativar uma OLT. Sem descoberta ou lista configurada, o bot informa falha de consulta. Respostas parciais nao comprovam que um serial esta ausente.
+
+Os eventos `onu_refresh`, `onu_olt_failed` e `onu_search` registram horario UTC, cobertura da consulta e os ultimos quatro caracteres do serial. Os logs anteriores a essa instrumentacao nao permitem reconstruir todas as buscas sem resultado. Consultas simultaneas compartilham somente a operacao em andamento; a proxima busca atualiza as OLTs novamente.
+
 1. Escolhe o tipo de servico: instalacao, mudanca de endereco, troca de equipamento ou troca de titularidade.
 2. Informa no minimo 4 caracteres do serial e escolhe a ONU pelo serial completo.
 3. O bot executa a consulta equivalente ao botao `Consultar todas` e busca a ONU aguardando autorizacao no IXC.

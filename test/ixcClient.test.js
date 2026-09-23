@@ -1361,21 +1361,27 @@ test('ONU autorizada usa consulta parcial pelo MAC', async () => {
   assert.equal(request.params.oper, 'L');
 });
 
-test('Consultar todas atualiza a fila por uma unica chamada global do IXC', async () => {
+test('Consultar todas atualiza apenas OLTs ativas homologadas, nunca radios ou fila global antiga', async () => {
   const client = Object.create(IxcClient.prototype);
   const calls = [];
   client.list = async (resource, params = {}, options = {}) => {
     calls.push({ resource, params, options });
-    return [{ id: 'onu-7', mac: 'SERIAL-7' }, { id: 'onu-1056', mac: 'SERIAL-1056' }];
+    if (resource === 'radpop_radio') return [
+      { id: '7', ativo: 'S', fabricante_modelo: 'FH' },
+      { id: '1056', ativo: 'S', fabricante_modelo: 'HW' },
+      { id: '9', ativo: 'N', fabricante_modelo: 'HW' },
+      { id: '10', ativo: 'S', fabricante_modelo: 'MIKROTIK' },
+    ];
+    const id = JSON.parse(params.grid_param)[0].P;
+    return [{ id: `onu-${id}`, mac: `SERIAL-${id}` }];
   };
 
   const rows = await client.listPendingOnus({ refresh: true });
 
   assert.deepEqual(rows.map((row) => row.id), ['onu-7', 'onu-1056']);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].resource, 'fh_onu_nao_autorizadas');
-  assert.deepEqual(calls[0].params, {});
-  assert.deepEqual(calls[0].options, { timeoutMs: 60000, retryTransient: false });
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].resource, 'radpop_radio');
+  assert.ok(calls.slice(1).every((call) => call.params.grid_param && call.options.strictResponse));
 });
 
 test('consulta critica de OLT respeita timeout curto sem repetir automaticamente', async () => {
@@ -1396,14 +1402,73 @@ test('consulta critica de OLT respeita timeout curto sem repetir automaticamente
   assert.equal(calls, 1);
 });
 
-test('falha de timeout no Consultar todas retorna orientacao clara', async () => {
+test('falha em todas as OLTs nao resulta em serial inexistente', async () => {
   const client = Object.create(IxcClient.prototype);
+  client.pendingOltIds = ['6'];
   client.list = async () => {
     throw Object.assign(new Error('timeout'), { code: 'ECONNABORTED' });
   };
 
   await assert.rejects(
-    () => client.listPendingOnus(),
-    (error) => error.code === 'IXC_OLT_LOOKUP_TIMEOUT' && /Consultar todas/.test(error.message)
+    () => client.findPendingOnusBySerialSuffix('F438'),
+    /Nao foi possivel confirmar esse serial/
   );
+});
+
+test('consulta usa lista configurada quando API nega descoberta e encontra F438 em resposta fresca', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.pendingOltIds = ['6', '7'];
+  client.list = async (table, params) => {
+    if (table === 'radpop_radio') throw new Error('Sem permissao');
+    if (JSON.parse(params.grid_param)[0].P === '7') throw new Error('timeout');
+    return [{ id: 'fresh', mac: 'HWTCeb1bf438', id_olt: '6' }];
+  };
+  assert.equal((await client.findPendingOnusBySerialSuffix('f438'))[0].id, 'fresh');
+  await assert.rejects(() => client.findPendingOnusBySerialSuffix('FFFF'), /Nao foi possivel confirmar/);
+});
+
+test('consulta concorrente compartilha atualizacao mas consulta seguinte atualiza novamente', async () => {
+  const client = Object.create(IxcClient.prototype);
+  let releases;
+  let count = 0;
+  client.refreshPendingOnus = async () => { count++; return new Promise(resolve => { releases = resolve; }); };
+  const first = client.listPendingOnus();
+  const second = client.listPendingOnus();
+  releases([]);
+  await Promise.all([first, second]);
+  assert.equal(count, 1);
+  const third = client.listPendingOnus();
+  releases([]);
+  await third;
+  assert.equal(count, 2);
+});
+
+test('atualizacao limita a tres consultas simultaneas e cobre todas as OLTs', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.pendingOltIds = ['1','2','3','4','5','6','7'];
+  let active = 0, peak = 0, count = 0;
+  client.list = async (table) => {
+    if (table === 'radpop_radio') throw new Error('Sem permissao');
+    active++; peak = Math.max(peak, active); count++;
+    await new Promise(resolve => setImmediate(resolve));
+    active--; return [];
+  };
+  const rows = await client.listPendingOnus();
+  assert.equal(count, 7);
+  assert.equal(peak, 3);
+  assert.deepEqual(rows.failedOlts, []);
+});
+
+test('consulta estrita distingue erro HTTP 200 de fila vazia valida', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.http = { get: async () => ({ data: { type: 'error', message: 'Sem permissao' } }) };
+  await assert.rejects(() => client.list('fh_onu_nao_autorizadas', {}, { strictResponse: true }), /Sem permissao/);
+  client.http.get = async () => ({ data: '<html>login</html>' });
+  await assert.rejects(() => client.list('fh_onu_nao_autorizadas', {}, { strictResponse: true }), /Resposta invalida/);
+  client.http.get = async () => ({ data: { rows: [], total: 0 } });
+  assert.deepEqual(await client.list('fh_onu_nao_autorizadas', {}, { strictResponse: true }), []);
+  client.http.get = async () => ({ data: { page: 1, total: 0, type: 'error', message: 'Nenhuma onu disponivel' } });
+  assert.deepEqual(await client.list('fh_onu_nao_autorizadas', {}, { strictResponse: true }), []);
+  client.http.get = async () => ({ data: { total: 0, type: 'error', message: 'Sem permissao' } });
+  await assert.rejects(() => client.list('fh_onu_nao_autorizadas', {}, { strictResponse: true }), /Sem permissao/);
 });
