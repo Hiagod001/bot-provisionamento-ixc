@@ -690,23 +690,34 @@ export class IxcClient {
   async findBoxes(query, oltId) {
     const trimmed = String(query).trim();
     const numeric = /^\d+$/.test(trimmed);
-    const rows = await this.list('rad_caixa_ftth', {
-      qtype: numeric ? 'rad_caixa_ftth.id' : 'rad_caixa_ftth.descricao',
-      query: trimmed,
-      oper: numeric ? '=' : 'L',
+    const varjaoNumber = numeric && String(oltId) === '1056';
+    const params = {
+      qtype: numeric && !varjaoNumber ? 'rad_caixa_ftth.id' : 'rad_caixa_ftth.descricao',
+      query: varjaoNumber ? 'VRJ' : trimmed,
+      oper: numeric && !varjaoNumber ? '=' : 'L',
       rp: '200',
       grid_param: JSON.stringify([
         { TB: 'rad_caixa_ftth.id_projeto', OP: '=', P: IMPORT_PROJECT_ID },
         { TB: 'rad_caixa_ftth.status', OP: '=', P: 'A' },
         ...(oltId ? [{ TB: 'rad_caixa_ftth.id_transmissor', OP: '=', P: String(oltId) }] : []),
       ]),
-      sortname: 'rad_caixa_ftth.descricao',
+      sortname: varjaoNumber ? 'rad_caixa_ftth.id' : 'rad_caixa_ftth.descricao',
       sortorder: 'asc',
-    });
+    };
+    const rows = [];
+    for (let page = 1; ; page += 1) {
+      const batch = await this.list('rad_caixa_ftth', { ...params, page: String(page) });
+      rows.push(...batch);
+      if (!varjaoNumber || batch.length < Number(params.rp)) break;
+    }
 
     return rows.filter(
       (box) =>
         isBoxAvailableForLocation(box) &&
+        (!varjaoNumber || (() => {
+          const match = String(box.descricao || '').trim().match(/^VRJ\s*-\s*\d+\s*-\s*(\d+)\s*$/i);
+          return match && Number(match[1]) === Number(trimmed);
+        })()) &&
         (!oltId || !box.id_transmissor || String(box.id_transmissor) === String(oltId))
     ).sort((a, b) => {
       const exact = (box) => String(box.descricao || '').trim().toUpperCase() === trimmed.toUpperCase();

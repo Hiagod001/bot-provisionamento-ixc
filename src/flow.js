@@ -917,9 +917,12 @@ const loadOlt = async (state, ixc) => {
 
 const askBoxLocation = async (ctx, state) => {
   state.step = 'box_location';
+  const isVarjao = String(state.olt?.id || state.onu?.id_olt) === '1056';
   await ctx.reply(
-    'Envie sua localizacao para buscar caixas proximas ou digite o nome da caixa. Em Varjao, digite o nome, por exemplo: VRJ - 01-01 (as caixas estao sem coordenadas).',
-    locationKeyboard()
+    isVarjao
+      ? 'Digite somente o numero da caixa. Exemplo: 1 para VRJ - 01-01 ou 66 para VRJ - 01-66.'
+      : 'Envie sua localizacao para buscar caixas proximas ou digite o nome da caixa.',
+    isVarjao ? { reply_markup: { remove_keyboard: true } } : locationKeyboard()
   );
 };
 
@@ -1519,7 +1522,9 @@ export const registerFlow = (bot, ixc, config) => {
       await ctx.reply(
         isSignalLookup
           ? 'Nao achei caixa em ate 300m. Envie uma localizacao mais perto da CTO.'
-          : 'Nao achei caixa com coordenadas em ate 300m. Digite o nome da caixa, por exemplo: VRJ - 01-01, ou envie outra localizacao.'
+          : String(state.olt?.id || state.onu?.id_olt) === '1056'
+            ? 'As caixas de Varjao estao sem coordenadas. Digite somente o numero da caixa. Exemplo: 1 para VRJ - 01-01.'
+            : 'Nao achei caixa com coordenadas em ate 300m. Digite o nome da caixa ou envie outra localizacao.'
       );
       return;
     }
@@ -1691,7 +1696,9 @@ export const registerFlow = (bot, ixc, config) => {
       const oltId = state.olt?.id || state.onu?.id_olt;
       const boxes = await ixc.findBoxes(text, oltId);
       if (!boxes.length) {
-        await ctx.reply('Caixa nao encontrada. Envie o nome.');
+        await ctx.reply(String(oltId) === '1056'
+          ? 'Nao encontrei essa caixa de Varjao no Projeto importacao. Confira e envie somente o numero da caixa.'
+          : 'Caixa nao encontrada. Envie o nome.');
         return;
       }
 

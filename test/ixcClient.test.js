@@ -825,6 +825,24 @@ test('busca digitada tambem exclui caixas de outros projetos', async () => {
   assert.deepEqual(boxes.map((box) => box.id), ['1']);
 });
 
+test('numero de caixa VRJ usa numero do nome, aceita zeros e nao confunde com ID ou numero parcial', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.list = async (_table, params) => {
+    assert.equal(params.qtype, 'rad_caixa_ftth.descricao');
+    return [
+      { id: '500', descricao: 'VRJ - 01-01', id_projeto: '1', id_transmissor: '1056', status: 'A' },
+      { id: '501', descricao: ' VRJ - 02 - 001 ', id_projeto: '1', id_transmissor: '1056', status: 'A' },
+      { id: '1', descricao: 'VRJ - 01-11', id_projeto: '1', id_transmissor: '1056', status: 'A' },
+      { id: '502', descricao: 'VRJ - 01-01', id_projeto: '35', id_transmissor: '1056', status: 'A' },
+      { id: '503', descricao: 'VRJ - 01-01', id_projeto: '1', id_transmissor: '6', status: 'A' },
+    ];
+  };
+  for (const number of ['1', '01', '001']) {
+    assert.deepEqual((await client.findBoxes(number, '1056')).map(b => b.id), ['500', '501']);
+  }
+  assert.deepEqual(await client.findBoxes('500', '1056'), []);
+});
+
 test('VRJ digitada encontra caixa sem GPS na OLT correta e filtra projeto antes da paginacao', async () => {
   const client = Object.create(IxcClient.prototype);
   let params;
