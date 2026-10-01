@@ -766,6 +766,7 @@ test('busca por localizacao mostra somente caixas VRJ do projeto Importacao', as
     {
       id: '1',
       descricao: 'VRJ - 01-068',
+      id_transmissor: '1056',
       id_projeto: '1',
       status: 'A',
       latitude: '-18.3775247',
@@ -822,6 +823,25 @@ test('busca digitada tambem exclui caixas de outros projetos', async () => {
 
   const boxes = await client.findBoxes('PMS', '2');
   assert.deepEqual(boxes.map((box) => box.id), ['1']);
+});
+
+test('VRJ digitada encontra caixa sem GPS na OLT correta e filtra projeto antes da paginacao', async () => {
+  const client = Object.create(IxcClient.prototype);
+  let params;
+  client.list = async (_table, input) => {
+    params = input;
+    return [
+      { id: '1', descricao: 'VRJ - 01-01', id_projeto: '1', id_transmissor: '1056', status: 'A', latitude: '', longitude: '' },
+      { id: '2', descricao: 'VRJ - 01-01', id_projeto: '35', id_transmissor: '1056', status: 'A' },
+      { id: '3', descricao: 'VRJ - 01-01', id_projeto: '1', id_transmissor: '6', status: 'A' },
+    ];
+  };
+  const rows = await client.findBoxes('VRJ - 01-01', '1056');
+  assert.deepEqual(rows.map(row => row.id), ['1']);
+  assert.equal(params.oper, 'L');
+  assert.ok(JSON.parse(params.grid_param).some(filter => filter.TB === 'rad_caixa_ftth.id_projeto' && filter.P === '1'));
+  client.listAllBoxes = async () => rows;
+  assert.deepEqual(await client.findBoxesNearLocation({ latitude: 0, longitude: 0 }), []);
 });
 
 test('busca por localizacao de Paracatu mostra somente caixas PTU da OLT e projeto Importacao', async () => {

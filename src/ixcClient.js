@@ -340,6 +340,7 @@ export const deriveProvisionNetworkFields = (rows, target) => {
 };
 
 const toNumber = (value) => {
+  if (value == null || String(value).trim() === '') return null;
   const number = Number(String(value).replace(',', '.'));
   return Number.isFinite(number) ? number : null;
 };
@@ -366,7 +367,7 @@ const isBoxAvailableForLocation = (box) => {
   const description = String(box?.descricao || box?.nome || '').trim();
   if (!isImportProjectBox(box) || box?.status !== 'A') return false;
   if (/^VRJ(?:\s*-|\s|$)/i.test(description)) {
-    return true;
+    return String(box?.id_transmissor) === '1056';
   }
   if (/^PTU(?:\s*-|\s|$)/i.test(description)) {
     return String(box?.id_transmissor) === '5';
@@ -692,18 +693,25 @@ export class IxcClient {
     const rows = await this.list('rad_caixa_ftth', {
       qtype: numeric ? 'rad_caixa_ftth.id' : 'rad_caixa_ftth.descricao',
       query: trimmed,
-      oper: numeric ? '=' : 'LIKE',
-      rp: '20',
+      oper: numeric ? '=' : 'L',
+      rp: '200',
+      grid_param: JSON.stringify([
+        { TB: 'rad_caixa_ftth.id_projeto', OP: '=', P: IMPORT_PROJECT_ID },
+        { TB: 'rad_caixa_ftth.status', OP: '=', P: 'A' },
+        ...(oltId ? [{ TB: 'rad_caixa_ftth.id_transmissor', OP: '=', P: String(oltId) }] : []),
+      ]),
       sortname: 'rad_caixa_ftth.descricao',
       sortorder: 'asc',
     });
 
     return rows.filter(
       (box) =>
-        isImportProjectBox(box) &&
-        box.status === 'A' &&
+        isBoxAvailableForLocation(box) &&
         (!oltId || !box.id_transmissor || String(box.id_transmissor) === String(oltId))
-    );
+    ).sort((a, b) => {
+      const exact = (box) => String(box.descricao || '').trim().toUpperCase() === trimmed.toUpperCase();
+      return Number(exact(b)) - Number(exact(a));
+    });
   }
 
   async findBoxesNearLocation(location, { radiusMeters = 300, limit = 10 } = {}) {

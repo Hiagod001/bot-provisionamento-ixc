@@ -918,7 +918,7 @@ const loadOlt = async (state, ixc) => {
 const askBoxLocation = async (ctx, state) => {
   state.step = 'box_location';
   await ctx.reply(
-    'Envie sua localizacao para buscar caixas proximas.',
+    'Envie sua localizacao para buscar caixas proximas ou digite o nome da caixa. Em Varjao, digite o nome, por exemplo: VRJ - 01-01 (as caixas estao sem coordenadas).',
     locationKeyboard()
   );
 };
@@ -1319,7 +1319,7 @@ export const registerFlow = (bot, ixc, config) => {
   bot.action(/^box:/, async (ctx) => {
     const state = getSession(ctx);
     const box = await selectByCallback(ctx, 'box', 'box_choose', 'box', 'port_lookup', (selected) =>
-      `Caixa escolhida: ${short(selected.descricao)} (${short(selected.distanceMeters)}m)`
+      `Caixa escolhida: ${short(selected.descricao)}${Number.isFinite(selected.distanceMeters) ? ` (${selected.distanceMeters}m)` : ''}`
     );
     if (!box) return;
     await askFreePortChoice(ctx, state, ixc);
@@ -1517,7 +1517,9 @@ export const registerFlow = (bot, ixc, config) => {
 
     if (!boxes.length) {
       await ctx.reply(
-        'Nao achei caixa em ate 300m. Envie uma localizacao mais perto da CTO.'
+        isSignalLookup
+          ? 'Nao achei caixa em ate 300m. Envie uma localizacao mais perto da CTO.'
+          : 'Nao achei caixa com coordenadas em ate 300m. Digite o nome da caixa, por exemplo: VRJ - 01-01, ou envie outra localizacao.'
       );
       return;
     }
@@ -1684,12 +1686,7 @@ export const registerFlow = (bot, ixc, config) => {
       return;
     }
 
-    if (state.step === 'box_location') {
-      await ctx.reply('Use o botao para enviar a localizacao.');
-      return;
-    }
-
-    if (state.step === 'box') {
+    if (state.step === 'box' || state.step === 'box_location') {
       await ctx.reply('Buscando caixa...');
       const oltId = state.olt?.id || state.onu?.id_olt;
       const boxes = await ixc.findBoxes(text, oltId);
@@ -1698,16 +1695,9 @@ export const registerFlow = (bot, ixc, config) => {
         return;
       }
 
-      await pickSingleOrAsk(
-        ctx,
-        state,
-        boxes,
-        'box',
-        'drop_port',
-        'box',
-        (box) => `Caixa escolhida: ${short(box.descricao)}\n\nEnvie a porta onde o drop esta ligado.`,
-        (box) => box.descricao || box.nome || 'Caixa sem nome'
-      );
+      const token = setMenuChoices(state, boxes, 'box_choose');
+      await ctx.reply('Confirme a caixa pelo nome:', rowsKeyboard('box', boxes,
+        (box) => box.descricao || box.nome || 'Caixa sem nome', token));
       return;
     }
 
