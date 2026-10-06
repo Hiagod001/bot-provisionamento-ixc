@@ -371,7 +371,9 @@ const askOldFiberRemoval = async (ctx, state) => {
 const askSwapOldFiberRemoval = async (ctx, state) => {
   state.step = 'swap_oldfiber_confirm';
   await ctx.reply(
-    `${formatAuthorizedOnu(state.oldFiber)}\n\nVou remover a ONU antiga e usar a mesma caixa/porta.`,
+    `${formatAuthorizedOnu(state.oldFiber)}\n\n${isSgaOnu(state)
+      ? 'Vou remover a ONU antiga e usar automaticamente a caixa sga-teste, sem definir porta.'
+      : 'Vou remover a ONU antiga e usar a mesma caixa/porta.'}`,
     swapOldFiberKeyboard()
   );
 };
@@ -456,7 +458,7 @@ export const handleSwapAfterContractChoice = async (ctx, state, ixc) => {
   if (!oldFibers.length) {
     state.oldFiber = null;
     state.swapWithoutOldFiber = true;
-    await askBoxLocation(ctx, state);
+    await askBoxLocation(ctx, state, ixc);
     return true;
   }
 
@@ -856,7 +858,11 @@ const selectByCallback = async (ctx, prefix, expectedStep, field, nextStep, next
 };
 
 export const buildProvisionPayload = (state) => {
-  if (String(state.box?.id_projeto || '') !== '1') {
+  const sga = isSgaOnu(state);
+  if (sga && !isSgaDefaultBox(state.box)) {
+    throw new Error('A ONU de Sao Goncalo precisa usar a caixa sga-teste validada.');
+  }
+  if (!sga && String(state.box?.id_projeto || '') !== '1') {
     throw new Error('A caixa escolhida nao pertence ao Projeto importacao. Selecione outra caixa.');
   }
 
@@ -867,7 +873,7 @@ export const buildProvisionPayload = (state) => {
     id_transmissor: short(state.olt?.id || state.onu?.id_olt, ''),
     id_caixa_ftth: short(state.box?.id, ''),
     id_projeto: short(state.box?.id_projeto, ''),
-    porta_ftth: short(state.dropPort, ''),
+    porta_ftth: sga ? '0' : short(state.dropPort, ''),
     id_contrato: short(state.contract?.id, ''),
     id_login: short(state.login?.id, ''),
     nome: short(state.client?.razao || state.login?.login || state.onu?.mac, 'ONU provisionada pelo bot'),
@@ -915,7 +921,49 @@ const loadOlt = async (state, ixc) => {
   }
 };
 
-const askBoxLocation = async (ctx, state) => {
+export const isSgaOnu = (state) =>
+  String(state.onu?.id_olt || '') === '1105' &&
+  (!state.olt?.id || String(state.olt.id) === '1105');
+
+const isSgaDefaultBox = (box) => String(box?.id) === '49904' &&
+  String(box?.id_transmissor) === '1105' && String(box?.id_projeto) === '37' &&
+  box?.status === 'A' && String(box?.descricao || '').trim().toLowerCase() === 'sga-teste';
+
+const loadSgaDefaultBox = async (ixc) => {
+  const box = await ixc.read('rad_caixa_ftth', '49904');
+  if (!isSgaDefaultBox(box)) throw new Error('A caixa sga-teste esta indisponivel ou foi alterada. Acione o NOC para conferir.');
+  return box;
+};
+
+const continueAfterBoxSelection = async (ctx, state, ixc) => {
+  if (state.serviceType === 'troca' && state.swapWithoutOldFiber && state.contract?.id) {
+    await askLoginForContract(ctx, state, ixc);
+  } else if (state.serviceType === 'mudanca' && state.login?.id) {
+    await clearLoginMacWithWarning(ctx, state, ixc);
+    await askProfile(ctx, state, ixc);
+  } else if (state.serviceType === 'troca' && state.login?.id) {
+    await askProfile(ctx, state, ixc);
+  } else {
+    state.step = 'client';
+    await ctx.reply('Envie o ID do cliente.');
+  }
+};
+
+export const selectSgaDefaultBox = async (ctx, state, ixc, validatedBox) => {
+  if (!isSgaOnu(state)) return false;
+  const box = validatedBox || await loadSgaDefaultBox(ixc);
+  if (!isSgaDefaultBox(box)) throw new Error('Caixa padrao de Sao Goncalo invalida.');
+  state.box = box;
+  state.dropPort = '0';
+  state.freePorts = [];
+  clearMenuChoices(state);
+  await ctx.reply('Sao Goncalo: caixa sga-teste selecionada automaticamente. Nao precisa informar caixa nem porta.', { reply_markup: { remove_keyboard: true } });
+  await continueAfterBoxSelection(ctx, state, ixc);
+  return true;
+};
+
+const askBoxLocation = async (ctx, state, ixc) => {
+  if (await selectSgaDefaultBox(ctx, state, ixc)) return;
   state.step = 'box_location';
   const isVarjao = String(state.olt?.id || state.onu?.id_olt) === '1056';
   await ctx.reply(
@@ -1157,7 +1205,7 @@ export const registerFlow = (bot, ixc, config) => {
         state.step = 'client';
         await ctx.reply('Envie o ID do cliente.');
       } else {
-        await askBoxLocation(ctx, state);
+        await askBoxLocation(ctx, state, ixc);
       }
     }
   });
@@ -1187,7 +1235,7 @@ export const registerFlow = (bot, ixc, config) => {
     }
 
     await ctx.answerCbQuery('ONU confirmada');
-    await askBoxLocation(ctx, state);
+    await askBoxLocation(ctx, state, ixc);
   });
 
   bot.action(/^swapoldonu:/, async (ctx) => {
@@ -1244,7 +1292,8 @@ export const registerFlow = (bot, ixc, config) => {
     }
 
     const oldFiber = state.oldFiber;
-    if (!oldFiber.id_caixa_ftth || !oldFiber.porta_ftth || oldFiber.porta_ftth === '0') {
+    const sgaBox = isSgaOnu(state) ? await loadSgaDefaultBox(ixc) : null;
+    if (!sgaBox && (!oldFiber.id_caixa_ftth || !oldFiber.porta_ftth || oldFiber.porta_ftth === '0')) {
       await ctx.answerCbQuery('Dados antigos incompletos');
       await ctx.reply(
         'ONU antiga sem caixa/porta. Corrija no IXC ou envie /cancelar.'
@@ -1256,6 +1305,13 @@ export const registerFlow = (bot, ixc, config) => {
     await ctx.reply('Removendo o equipamento antigo. Aguarde a confirmacao antes de tentar novamente.');
     await ixc.removeAuthorizedOnu(oldFiber.id);
 
+    if (sgaBox) {
+      state.oldFiber = null;
+      await clearLoginMacWithWarning(ctx, state, ixc);
+      await selectSgaDefaultBox(ctx, state, ixc, sgaBox);
+      return;
+    }
+
     const box = oldFiber.id_caixa_ftth ? await ixc.read('rad_caixa_ftth', oldFiber.id_caixa_ftth) : null;
     if (String(box?.id_projeto || '') !== '1') {
       state.box = null;
@@ -1264,7 +1320,7 @@ export const registerFlow = (bot, ixc, config) => {
       console.log(`Caixa antiga ${oldFiber.id_caixa_ftth} fora do Projeto importacao; solicitando nova caixa.`);
       await clearLoginMacWithWarning(ctx, state, ixc);
       await ctx.reply('A caixa antiga nao pertence ao Projeto importacao. Envie a localizacao para escolher uma caixa valida.');
-      await askBoxLocation(ctx, state);
+      await askBoxLocation(ctx, state, ixc);
       return;
     }
     state.box = box || {
@@ -1349,25 +1405,7 @@ export const registerFlow = (bot, ixc, config) => {
     state.dropPort = String(port);
     clearMenuChoices(state);
     await ctx.answerCbQuery(`Porta ${port} selecionada`);
-    if (
-      state.serviceType === 'troca' &&
-      state.swapWithoutOldFiber &&
-      state.contract?.id
-    ) {
-      await askLoginForContract(ctx, state, ixc);
-      return;
-    }
-    if (state.serviceType === 'mudanca' && state.login?.id) {
-      await clearLoginMacWithWarning(ctx, state, ixc);
-      await askProfile(ctx, state, ixc);
-      return;
-    }
-    if (state.serviceType === 'troca' && state.login?.id) {
-      await askProfile(ctx, state, ixc);
-      return;
-    }
-    state.step = 'client';
-    await ctx.reply(`Porta ${port}\n\nEnvie o ID do cliente.`);
+    await continueAfterBoxSelection(ctx, state, ixc);
   });
 
   bot.action(/^contract:/, async (ctx) => {

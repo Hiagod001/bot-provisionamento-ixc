@@ -12,6 +12,8 @@ Bot em Node.js para guiar o tecnico pelo provisionamento de ONU no IXC Provedor.
 
 ## Fluxo do tecnico
 
+Excecao de Sao Goncalo do Abaete: ONUs da OLT `1105` (`olt_fh_sga`) usam automaticamente a caixa `49904` (`sga-teste`), projeto `37`, com `porta_ftth = 0` (porta nao definida). O tecnico nao informa localizacao, caixa ou porta. O bot verifica se a caixa continua ativa, com esse nome, projeto e OLT; se houver alteracao, bloqueia e solicita verificacao do NOC. A excecao nao libera outras caixas ou cidades fora do Projeto importacao.
+
 A busca de ONUs atualiza cada OLT ativa homologada, com ate tres consultas simultaneas e prazo total de 60 segundos. A listagem global sem filtros pode conter uma fila anterior e nao substitui essa atualizacao. Se a API negar acesso a `radpop_radio`, configure `IXC_PENDING_OLT_IDS` com os IDs conferidos na tela **Autorizar ONUs > Consultar por OLT**; revise essa lista ao adicionar, remover ou desativar uma OLT. Sem descoberta ou lista configurada, o bot informa falha de consulta. Respostas parciais nao comprovam que um serial esta ausente.
 
 Os eventos `onu_refresh`, `onu_olt_failed` e `onu_search` registram horario UTC, cobertura da consulta e os ultimos quatro caracteres do serial. Os logs anteriores a essa instrumentacao nao permitem reconstruir todas as buscas sem resultado. Consultas simultaneas compartilham somente a operacao em andamento; a proxima busca atualiza as OLTs novamente.

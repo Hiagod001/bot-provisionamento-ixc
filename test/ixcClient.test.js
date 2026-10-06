@@ -14,6 +14,7 @@ import {
   answerCallbackQuerySafely,
   buildSerialRequestMessage,
   buildProvisionPayload,
+  selectSgaDefaultBox,
   claimProcessingStep,
   clearLoginMacWithWarning,
   findExistingTitularityProfile,
@@ -948,6 +949,37 @@ test('provisionamento bloqueia caixa de outro projeto mesmo se chegar ao payload
     () => buildProvisionPayload({ box: { id: '10', id_projeto: '38' } }),
     /Projeto importacao/
   );
+});
+
+const sgaTestBox = { id: '49904', descricao: 'sga-teste', id_transmissor: '1105', id_projeto: '37', status: 'A' };
+
+test('SGA seleciona caixa automatica sem consultar portas e segue para cliente', async () => {
+  const state = { serviceType: 'instalacao', onu: { id_olt: '1105' }, matches: [], freePorts: ['1'] };
+  const replies = [];
+  const ixc = { read: async (table, id) => {
+    assert.equal(table, 'rad_caixa_ftth'); assert.equal(id, '49904'); return { ...sgaTestBox };
+  } };
+  assert.equal(await selectSgaDefaultBox({ reply: async (text) => replies.push(text) }, state, ixc), true);
+  assert.equal(state.box.id, '49904');
+  assert.equal(state.dropPort, '0');
+  assert.equal(state.step, 'client');
+  assert.deepEqual(state.freePorts, []);
+  assert.match(replies.at(-1), /ID do cliente/);
+  const payload = buildProvisionPayload(state).clienteFibra;
+  assert.equal(payload.id_caixa_ftth, '49904');
+  assert.equal(payload.id_projeto, '37');
+  assert.equal(payload.porta_ftth, '0');
+});
+
+test('excecao SGA nao libera outra caixa, outra OLT, caixa inativa ou projeto alterado', async () => {
+  const base = { onu: { id_olt: '1105' }, box: sgaTestBox };
+  for (const box of [ { ...sgaTestBox, id: '50969' }, { ...sgaTestBox, status: 'I' }, { ...sgaTestBox, id_projeto: '1' }, { ...sgaTestBox, id_transmissor: '6' } ]) {
+    assert.throws(() => buildProvisionPayload({ ...base, box }), /sga-teste/);
+    await assert.rejects(() => selectSgaDefaultBox({}, base, { read: async () => box }), /indisponivel/);
+  }
+  assert.throws(() => buildProvisionPayload({ ...base, onu: { id_olt: '6' } }), /Projeto importacao/);
+  assert.throws(() => buildProvisionPayload({ ...base, olt: { id: '6' } }), /Projeto importacao/);
+  assert.equal(await selectSgaDefaultBox({}, { onu: { id_olt: '6' } }, {}), false);
 });
 
 test('relatorio de sinal mantem ONU offline sem interromper as outras consultas', async () => {
