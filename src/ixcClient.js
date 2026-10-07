@@ -126,6 +126,16 @@ const profilesForLocation = (rows, code) =>
   });
 
 export const selectProfilesForOlt = (rows, olt, onu = null) => {
+  // Brejo uses a FiberHome OLT even when the attached ONU is Huawei.
+  // radpop_radio can be unavailable to the API user: retain the verified OLT ID.
+  const oltId = String(olt?.id || onu?.id_olt || onu?.id_transmissor || '');
+  const oltName = compactName([olt?.descricao, olt?.olt_nome, olt?.nome, onu?.olt_nome].filter(Boolean).join(' '));
+  if (oltId === '8' || /BRJ|BREJO/.test(oltName)) {
+    return profilesForLocation(rows, 'BRJ').filter((profile) => {
+      const manufacturer = String(profile.fabricante_modelo || '').trim().toUpperCase();
+      return !manufacturer || ['FH', 'FBT', 'FB6001', 'FIBERHOME'].includes(manufacturer);
+    });
+  }
   const pmsOlt = identifyPmsOlt(olt, onu);
   if (pmsOlt) {
     return rows.filter((profile) => {

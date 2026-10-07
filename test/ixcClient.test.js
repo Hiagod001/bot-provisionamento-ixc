@@ -951,6 +951,18 @@ test('provisionamento bloqueia caixa de outro projeto mesmo se chegar ao payload
   );
 });
 
+test('Brejo usa scripts BRJ com ONU Huawei e cadastro da OLT indisponivel', () => {
+  for (const olt of [null, { id: '8', descricao: 'OLT 8' }, { descricao: 'OLT Brejo' }]) {
+    assert.deepEqual(selectProfilesForOlt(profiles, olt, { id_olt: '8', modelo: 'Huawei', mac: 'HWTC12345678' }).map(p => p.id), ['92', '93']);
+  }
+});
+
+test('Brejo nao recorre a scripts Huawei ou de outra cidade se BRJ estiver ausente', () => {
+  const otherProfiles = profiles.filter(p => !/BRJ/.test(p.nome));
+  assert.deepEqual(selectProfilesForOlt(otherProfiles, { id: '8' }, { mac: 'HWTC12345678' }), []);
+  assert.deepEqual(selectProfilesForOlt([{ id: 'bad', nome: 'ONU-BRIDGE-BRJ', fabricante_modelo: 'HW' }], { id: '8' }), []);
+});
+
 const sgaTestBox = { id: '49904', descricao: 'sga-teste', id_transmissor: '1105', id_projeto: '37', status: 'A' };
 
 test('SGA seleciona caixa automatica sem consultar portas e segue para cliente', async () => {
