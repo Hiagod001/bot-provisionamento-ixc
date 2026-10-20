@@ -1,0 +1,17 @@
+[Unit]
+Description=Bot Telegram de provisionamento IXC
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/home/agenda/apps/bot-provisionamento-ixc
+ExecStart=/home/agenda/.nvm/versions/node/v24.13.0/bin/node src/index.js
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+StandardOutput=append:/home/agenda/apps/bot-provisionamento-ixc/bot.log
+StandardError=append:/home/agenda/apps/bot-provisionamento-ixc/bot.err.log
+UMask=0077
+
+[Install]
+WantedBy=default.target
