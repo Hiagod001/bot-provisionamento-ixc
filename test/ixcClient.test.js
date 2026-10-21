@@ -963,6 +963,16 @@ test('Brejo nao recorre a scripts Huawei ou de outra cidade se BRJ estiver ausen
   assert.deepEqual(selectProfilesForOlt([{ id: 'bad', nome: 'ONU-BRIDGE-BRJ', fabricante_modelo: 'HW' }], { id: '8' }), []);
 });
 
+test('localizacao libera somente CTO BK ativa do projeto 42 na OLT 1', async () => {
+  const client = Object.create(IxcClient.prototype);
+  const bk = { id: '50987', descricao: 'CTO - BK-A11', id_projeto: '42', id_transmissor: '1', status: 'A', latitude: '-18.896035', longitude: '-46.919730' };
+  client.listAllBoxes = async () => [bk, { ...bk, id: 'reserve', descricao: 'RESERVA ( SERA A CX BK-A12 )' }, { ...bk, id: 'wrong-project', id_projeto: '38' }, { ...bk, id: 'wrong-olt', id_transmissor: '5' }, { ...bk, id: 'inactive', status: 'I' }];
+  const boxes = await client.findBoxesNearLocation({ latitude: -18.8955683, longitude: -46.9201083 });
+  assert.deepEqual(boxes.map(b => b.id), ['50987']);
+  assert.equal(buildProvisionPayload({ box: bk, onu: { id_olt: '1' } }).clienteFibra.id_projeto, '42');
+  assert.throws(() => buildProvisionPayload({ box: bk, onu: { id_olt: '5' } }), /Projeto importacao/);
+});
+
 const sgaTestBox = { id: '49904', descricao: 'sga-teste', id_transmissor: '1105', id_projeto: '37', status: 'A' };
 
 test('SGA seleciona caixa automatica sem consultar portas e segue para cliente', async () => {

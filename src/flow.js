@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isAllowedProvisionBox } from './ixcClient.js';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -862,7 +863,7 @@ export const buildProvisionPayload = (state) => {
   if (sga && !isSgaDefaultBox(state.box)) {
     throw new Error('A ONU de Sao Goncalo precisa usar a caixa sga-teste validada.');
   }
-  if (!sga && String(state.box?.id_projeto || '') !== '1') {
+  if (!sga && !isAllowedProvisionBox(state.box, state.onu?.id_olt || state.olt?.id)) {
     throw new Error('A caixa escolhida nao pertence ao Projeto importacao. Selecione outra caixa.');
   }
 
@@ -1313,7 +1314,7 @@ export const registerFlow = (bot, ixc, config) => {
     }
 
     const box = oldFiber.id_caixa_ftth ? await ixc.read('rad_caixa_ftth', oldFiber.id_caixa_ftth) : null;
-    if (String(box?.id_projeto || '') !== '1') {
+    if (!isAllowedProvisionBox(box, state.onu?.id_olt || state.olt?.id)) {
       state.box = null;
       state.dropPort = null;
       state.oldFiber = null;

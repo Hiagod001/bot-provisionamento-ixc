@@ -373,9 +373,16 @@ export const IMPORT_PROJECT_ID = '1';
 export const isImportProjectBox = (box) =>
   String(box?.id_projeto || '') === IMPORT_PROJECT_ID;
 
+export const isBkProjectBox = (box) =>
+  String(box?.id_projeto) === '42' && String(box?.id_transmissor) === '1' &&
+  box?.status === 'A' && /^CTO\s*-\s*BK-[A-Z]\d+$/i.test(String(box?.descricao || '').trim());
+
+export const isAllowedProvisionBox = (box, oltId) => isImportProjectBox(box) ||
+  (isBkProjectBox(box) && String(oltId) === '1');
+
 const isBoxAvailableForLocation = (box) => {
   const description = String(box?.descricao || box?.nome || '').trim();
-  if (!isImportProjectBox(box) || box?.status !== 'A') return false;
+  if ((!isImportProjectBox(box) && !isBkProjectBox(box)) || box?.status !== 'A') return false;
   if (/^VRJ(?:\s*-|\s|$)/i.test(description)) {
     return String(box?.id_transmissor) === '1056';
   }
