@@ -20,6 +20,7 @@ import {
   findExistingTitularityProfile,
   filterContractsForService,
   formatNearbyBoxLabel,
+  formatBoxIdentification,
   handleSwapAfterContractChoice,
   POST_PROVISION_SIGNAL_DELAY_MS,
   completeRouterReplacement,
@@ -971,6 +972,22 @@ test('localizacao libera somente CTO BK ativa do projeto 42 na OLT 1', async () 
   assert.deepEqual(boxes.map(b => b.id), ['50987']);
   assert.equal(buildProvisionPayload({ box: bk, onu: { id_olt: '1' } }).clienteFibra.id_projeto, '42');
   assert.throws(() => buildProvisionPayload({ box: bk, onu: { id_olt: '5' } }), /Projeto importacao/);
+});
+
+test('identificador consulta outros projetos sem libera-los no provisionamento', async () => {
+  const client = Object.create(IxcClient.prototype);
+  const box = { id: '999999', descricao: '07-269', id_projeto: '99', status: 'A', latitude: '-18.8955683', longitude: '-46.9201083' };
+  client.listAllBoxes = async () => [box, { ...box, id: 'inactive', status: 'I' }, { ...box, id: 'reserve', descricao: 'RESERVA' }];
+  const location = { latitude: -18.8955683, longitude: -46.9201083 };
+  assert.deepEqual(await client.findBoxesNearLocation(location), []);
+  const found = await client.findBoxesNearLocation(location, { identificationOnly: true });
+  assert.deepEqual(found.map(b => b.id), ['999999']);
+  const message = formatBoxIdentification(found);
+  assert.match(message, /07-269/);
+  assert.match(message, /nao uma identificacao garantida/);
+  assert.doesNotMatch(message, /999999/);
+  assert.match(formatBoxIdentification([]), /Nao encontrei/);
+  assert.throws(() => buildProvisionPayload({ box, onu: { id_olt: '1' } }), /Projeto importacao/);
 });
 
 const sgaTestBox = { id: '49904', descricao: 'sga-teste', id_transmissor: '1105', id_projeto: '37', status: 'A' };

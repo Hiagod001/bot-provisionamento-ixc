@@ -4,6 +4,7 @@ export const provisionKeyboard = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('Provisionar', 'provision:start')],
     [Markup.button.callback('Verificar sinal', 'signal:start')],
+    [Markup.button.callback('Identificar caixa', 'identifybox:start')],
   ]);
 
 export const signalKeyboard = () =>

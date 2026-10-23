@@ -39,6 +39,10 @@ import {
 } from './format.js';
 
 const sessions = new Map();
+
+export const formatBoxIdentification = (boxes) => boxes.length
+  ? `Caixas cadastradas proximas (ate 300 m):\n\n${boxes.map((box, i) => `${i + 1}. ${box.descricao || box.nome || 'Caixa sem nome'} — ${box.distanceMeters} m`).join('\n')}\n\nA mais proxima e uma candidata, nao uma identificacao garantida. Confira o ponto em campo: o GPS e as coordenadas do cadastro podem ter diferenca.\nEnvie outra localizacao para consultar novamente ou /cancelar para sair.`
+  : 'Nao encontrei caixas ativas com coordenadas em ate 300 m. Envie a localizacao mais perto da caixa ou confira o cadastro com o NOC.';
 const serialGuideImagePath = fileURLToPath(
   new URL('../assets/serial-onu-exemplo.png', import.meta.url)
 );
@@ -1057,6 +1061,21 @@ export const registerFlow = (bot, ixc, config) => {
     await askSignalChoice(ctx);
   });
 
+  const startBoxIdentification = async (ctx) => {
+    if (processingSteps.has(getSession(ctx).step)) {
+      await ctx.reply('O processo ainda esta em andamento. Aguarde a confirmacao.');
+      return;
+    }
+    const state = resetSession(ctx);
+    state.step = 'identify_box_location';
+    await ctx.reply('Envie sua localizacao perto da caixa que deseja identificar. Esta consulta nao altera nenhum cadastro.', locationKeyboard());
+  };
+  bot.command('identificarcaixa', startBoxIdentification);
+  bot.action(/^identifybox:start$/, async (ctx) => {
+    await ctx.answerCbQuery('Identificar caixa');
+    await startBoxIdentification(ctx);
+  });
+
   bot.action(/^provisioned:signal$/, async (ctx) => {
     const state = getSession(ctx);
     if (!state.provisionedOnu?.id) {
@@ -1542,6 +1561,12 @@ export const registerFlow = (bot, ixc, config) => {
 
   bot.on('location', async (ctx) => {
     const state = getSession(ctx);
+    if (state.step === 'identify_box_location') {
+      await ctx.reply('Buscando caixas proximas...');
+      const boxes = await ixc.findBoxesNearLocation(ctx.message.location, { radiusMeters: 300, limit: 10, identificationOnly: true });
+      await ctx.reply(formatBoxIdentification(boxes), locationKeyboard());
+      return;
+    }
     const isSignalLookup = state.step === 'signal_box_location';
     if (state.step !== 'box_location' && !isSignalLookup) {
       await ctx.reply('Nao estou escolhendo caixa agora. Use o menu para comecar.');
@@ -1655,7 +1680,7 @@ export const registerFlow = (bot, ixc, config) => {
       return;
     }
 
-    if (state.step === 'signal_box_location') {
+    if (state.step === 'signal_box_location' || state.step === 'identify_box_location') {
       await ctx.reply('Use o botao para enviar a localizacao.');
       return;
     }

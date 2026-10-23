@@ -742,7 +742,7 @@ export class IxcClient {
     });
   }
 
-  async findBoxesNearLocation(location, { radiusMeters = 300, limit = 10 } = {}) {
+  async findBoxesNearLocation(location, { radiusMeters = 300, limit = 10, identificationOnly = false } = {}) {
     const origin = {
       latitude: Number(location.latitude),
       longitude: Number(location.longitude),
@@ -761,7 +761,7 @@ export class IxcClient {
           distanceMeters: Math.round(distanceMeters(origin, { latitude, longitude })),
         };
       })
-      .filter((box) => box && isBoxAvailableForLocation(box) && box.distanceMeters <= radiusMeters)
+      .filter((box) => box && (identificationOnly ? box.status === 'A' && !/RESERVA/i.test(box.descricao || '') : isBoxAvailableForLocation(box)) && box.distanceMeters <= radiusMeters)
       .sort((a, b) => a.distanceMeters - b.distanceMeters)
       .slice(0, limit);
   }
