@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { isAllowedProvisionBox } from './ixcClient.js';
+import { isAllowedProvisionBox, selectProfilesForOlt } from './ixcClient.js';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -863,6 +863,10 @@ const selectByCallback = async (ctx, prefix, expectedStep, field, nextStep, next
 };
 
 export const buildProvisionPayload = (state) => {
+  if (String(state.onu?.id_olt || state.olt?.id) === '9' &&
+      (!state.profile || !selectProfilesForOlt([state.profile], { id: '9' }, state.onu).length)) {
+    throw new Error('Perfil incompativel com a OLT FiberHome de Cruzeiro. Selecione um perfil CRZ.');
+  }
   const sga = isSgaOnu(state);
   if (sga && !isSgaDefaultBox(state.box)) {
     throw new Error('A ONU de Sao Goncalo precisa usar a caixa sga-teste validada.');

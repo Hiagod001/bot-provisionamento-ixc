@@ -130,6 +130,15 @@ export const selectProfilesForOlt = (rows, olt, onu = null) => {
   // radpop_radio can be unavailable to the API user: retain the verified OLT ID.
   const oltId = String(olt?.id || onu?.id_olt || onu?.id_transmissor || '');
   const oltName = compactName([olt?.descricao, olt?.olt_nome, olt?.nome, onu?.olt_nome].filter(Boolean).join(' '));
+  if (oltId === '9' || /CRZ|CRUZEIRO/.test(oltName)) {
+    return rows.filter((profile) => {
+      const name = compactName(profile.nome);
+      const manufacturer = String(profile.fabricante_modelo || '').trim().toUpperCase();
+      const compatible = !manufacturer || ['FH', 'FBT', 'FB6001', 'FIBERHOME'].includes(manufacturer);
+      return compatible && (profilesForLocation([profile], 'CRZ').length > 0 ||
+        (String(profile.id) === '32' && name === 'FBRIDGECRZPTCPMS01'));
+    });
+  }
   if (oltId === '8' || /BRJ|BREJO/.test(oltName)) {
     return profilesForLocation(rows, 'BRJ').filter((profile) => {
       const manufacturer = String(profile.fabricante_modelo || '').trim().toUpperCase();

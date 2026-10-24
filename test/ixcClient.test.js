@@ -990,6 +990,15 @@ test('identificador consulta outros projetos sem libera-los no provisionamento',
   assert.throws(() => buildProvisionPayload({ box, onu: { id_olt: '1' } }), /Projeto importacao/);
 });
 
+test('Cruzeiro permanece FiberHome por ID mesmo com ONU Huawei e sem dados da OLT', () => {
+  const rows = [...profiles, { id: '32', nome: 'F. BRIDGE -> ( CRZ-PTC-PMS-01)', fabricante_modelo: '' }];
+  const onu = { id_olt: '9', modelo: 'Huawei', mac: 'HWTCb13439b4' };
+  assert.deepEqual(selectProfilesForOlt(rows, null, onu).map(p => p.id), ['91', '32']);
+  assert.deepEqual(selectProfilesForOlt(rows.filter(p => !['91','32'].includes(p.id)), { id: '9' }, onu), []);
+  assert.throws(() => buildProvisionPayload({ onu, profile: profiles.find(p => p.id === '94') }), /Perfil incompativel/);
+  assert.throws(() => buildProvisionPayload({ onu }), /Perfil incompativel/);
+});
+
 const sgaTestBox = { id: '49904', descricao: 'sga-teste', id_transmissor: '1105', id_projeto: '37', status: 'A' };
 
 test('SGA seleciona caixa automatica sem consultar portas e segue para cliente', async () => {
