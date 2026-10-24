@@ -1427,7 +1427,7 @@ test('menu do tecnico reduz scripts para bridge e integrada sem expor IDs', () =
   assert.deepEqual(choices.map((profile) => profile.id), ['20', '26']);
 });
 
-test('troca sem ONU antiga continua pedindo localizacao para provisionar normalmente', async () => {
+test('troca sem ONU antiga interrompe sem solicitar nova caixa ou porta', async () => {
   const replies = [];
   const ctx = {
     reply: async (message, keyboard) => replies.push({ message, keyboard }),
@@ -1438,14 +1438,42 @@ test('troca sem ONU antiga continua pedindo localizacao para provisionar normalm
     oldFiber: null,
   };
   const ixc = {
-    findFiberClientsByContract: async () => [],
+    findSwapFiberClients: async () => [],
   };
 
   await handleSwapAfterContractChoice(ctx, state, ixc);
 
-  assert.equal(state.swapWithoutOldFiber, true);
-  assert.equal(state.step, 'box_location');
-  assert.match(replies[0].message, /Envie sua localizacao/);
+  assert.equal(state.swapWithoutOldFiber, false);
+  assert.equal(state.step, 'swap_lookup_blocked');
+  assert.match(replies[0].message, /preservar a caixa e a porta/);
+});
+
+test('troca recupera fibra pelo login mesmo sem vinculo direto ao contrato e preserva caixa e porta', async () => {
+  const client = Object.create(IxcClient.prototype);
+  const old = { id: '18350', id_login: '123', id_contrato: '0', id_caixa_ftth: '24257', porta_ftth: '1' };
+  client.findFiberClientsByContract = async () => [];
+  client.findPppoeLoginsByContract = async () => [{ id: '123', id_contrato: '59451' }];
+  client.findFiberClientsByLogin = async id => { assert.equal(id, '123'); return [old]; };
+  assert.deepEqual(await client.findSwapFiberClients('59451'), [old]);
+  client.findFiberClientsByContract = async () => [old];
+  assert.deepEqual(await client.findSwapFiberClients('59451'), [old]);
+});
+
+test('troca nao continua com consulta de login falhando ou retornando outro contrato', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.findFiberClientsByContract = async () => [];
+  client.findPppoeLoginsByContract = async () => { throw new Error('Sem permissao'); };
+  await assert.rejects(() => client.findSwapFiberClients('59451'), /Sem permissao/);
+  client.findPppoeLoginsByContract = async () => [{ id: '123', id_contrato: '99' }];
+  await assert.rejects(() => client.findSwapFiberClients('59451'), /fora do contrato/);
+});
+
+test('consultas de fibra e login rejeitam erro IXC em HTTP 200', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.http = { get: async () => ({ data: { type: 'error', message: 'Sem permissao' } }) };
+  await assert.rejects(() => client.findFiberClientsByContract('59451'), /Sem permissao/);
+  await assert.rejects(() => client.findFiberClientsByLogin('123'), /Sem permissao/);
+  await assert.rejects(() => client.findPppoeLoginsByContract('59451'), /Sem permissao/);
 });
 
 test('filtro de ONU pendente compara somente o serial', () => {

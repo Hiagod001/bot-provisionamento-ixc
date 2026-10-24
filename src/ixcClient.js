@@ -672,7 +672,7 @@ export class IxcClient {
       rp: '20',
       sortname: 'radpop_radio_cliente_fibra.id',
       sortorder: 'desc',
-    });
+    }, { strictResponse: true });
   }
 
   async findFiberClientsByLogin(loginId) {
@@ -683,7 +683,22 @@ export class IxcClient {
       rp: '20',
       sortname: 'radpop_radio_cliente_fibra.id',
       sortorder: 'desc',
-    });
+    }, { strictResponse: true });
+  }
+
+  async findSwapFiberClients(contractId) {
+    const direct = await this.findFiberClientsByContract(contractId);
+    const logins = await this.findPppoeLoginsByContract(contractId);
+    const linked = [];
+    for (const login of logins) {
+      if (String(login.id_contrato) !== String(contractId)) throw new Error('Login retornado fora do contrato da troca. Acione o NOC.');
+      const fibers = await this.findFiberClientsByLogin(login.id);
+      for (const fiber of fibers) {
+        if (String(fiber.id_login) !== String(login.id)) throw new Error('Fibra retornada fora do login da troca. Acione o NOC.');
+        linked.push(fiber);
+      }
+    }
+    return [...new Map([...direct, ...linked].map(f => [String(f.id), f])).values()];
   }
 
   async activateContract(contractId) {
@@ -859,7 +874,7 @@ export class IxcClient {
       rp: '20',
       sortname: 'radusuarios.id',
       sortorder: 'desc',
-    });
+    }, { strictResponse: true });
   }
 
   async findPppoeLoginsByClient(clientId) {
