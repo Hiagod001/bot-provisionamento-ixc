@@ -5,6 +5,7 @@ export const provisionKeyboard = () =>
     [Markup.button.callback('Provisionar', 'provision:start')],
     [Markup.button.callback('Verificar sinal', 'signal:start')],
     [Markup.button.callback('Identificar caixa', 'identifybox:start')],
+    [Markup.button.callback('Limpar MAC', 'clearmac:start')],
   ]);
 
 export const signalKeyboard = () =>

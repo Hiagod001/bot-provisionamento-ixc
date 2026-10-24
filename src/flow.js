@@ -95,6 +95,7 @@ const processingSteps = new Set([
   'provisioned_signal_loading',
   'oldfiber_removing',
   'swap_oldfiber_removing',
+  'mac_clear_processing',
 ]);
 
 export const claimProcessingStep = (state, expectedStep, processingStep) => {
@@ -584,6 +585,45 @@ export const clearLoginMacWithWarning = async (ctx, state, ixc) => {
   console.log(`MAC do login ${state.login.id} limpo pelo bot.`);
 };
 
+export const completeStandaloneMacClear = async (ctx, state, ixc, config) => {
+  if (!claimProcessingStep(state, 'mac_clear_confirm', 'mac_clear_processing')) return false;
+  try {
+    await ctx.reply('Limpando o MAC do login selecionado. Aguarde, nao precisa clicar novamente.');
+    const contract = await ixc.read('cliente_contrato', state.contract.id);
+    const login = await ixc.read('radusuarios', state.login.id);
+    if (!contract || String(contract.id_cliente) !== String(state.client.id) || !isContractActive(contract) ||
+        !login || String(login.id_contrato) !== String(contract.id) || String(login.id_cliente) !== String(state.client.id)) {
+      throw new Error('O vinculo do cliente, contrato ou login mudou. Reinicie a consulta.');
+    }
+    if (config.dryRun) {
+      state.step = 'mac_clear_done';
+      await ctx.reply('Simulacao: nenhum MAC foi alterado.', provisionKeyboard());
+      return true;
+    }
+    const result = await ixc.clearLoginMac(login.id);
+    if (result?.type !== 'success') throw new Error('O IXC nao confirmou a limpeza. Confira o login antes de tentar novamente.');
+    const verified = await ixc.read('radusuarios', login.id);
+    if (!verified || !Object.hasOwn(verified, 'mac') || String(verified.mac || '').trim() !== '' ||
+        String(verified.id_contrato) !== String(contract.id)) {
+      throw new Error('A limpeza foi solicitada, mas nao foi possivel confirmar o MAC vazio no IXC. Confira o login com o NOC.');
+    }
+    state.step = 'mac_clear_done';
+    console.log(JSON.stringify({ event: 'standalone_mac_clear', at: new Date().toISOString(), clientId: state.client.id, contractId: contract.id, loginId: login.id }));
+    await ctx.reply(`MAC limpo e conferido no IXC.\nContrato: ${contract.id}\nLogin: ${login.login}`, provisionKeyboard());
+    return true;
+  } catch (error) {
+    state.step = 'mac_clear_failed';
+    await ctx.reply(`Nao confirmei a limpeza do MAC. ${error.message}`, provisionKeyboard());
+    return false;
+  }
+};
+
+const askStandaloneMacConfirmation = async (ctx, state) => {
+  const token = setMenuChoices(state, [state.login], 'mac_clear_confirm');
+  await ctx.reply(`Cliente: ${state.client.razao}\nContrato: ${state.contract.id}\nLogin: ${state.login.login}\n\nConfirma limpar o MAC deste login? Nenhuma ONU sera removida. Para cancelar, envie /cancelar.`,
+    rowsKeyboard('clearmacconfirm', [state.login], () => 'Confirmar limpeza do MAC', token));
+};
+
 const clearTitularityLoginMacsWithWarning = async (ctx, state, ixc) => {
   const oldLoginId = state.oldFiber?.id_login;
   const newLoginId = state.login?.id;
@@ -1064,6 +1104,50 @@ export const registerFlow = (bot, ixc, config) => {
   bot.action(/^signal:start$/, async (ctx) => {
     await ctx.answerCbQuery('Verificar sinal');
     await askSignalChoice(ctx);
+  });
+
+  const startMacClear = async (ctx) => {
+    if (processingSteps.has(getSession(ctx).step)) {
+      await ctx.reply('Processo em andamento. Aguarde a conclusao.');
+      return;
+    }
+    const state = resetSession(ctx);
+    state.step = 'mac_client_id';
+    await ctx.reply('Limpar MAC: envie o ID do cliente.');
+  };
+  bot.command('limparmac', startMacClear);
+  bot.action(/^clearmac:start$/, async (ctx) => {
+    await ctx.answerCbQuery('Limpar MAC');
+    await startMacClear(ctx);
+  });
+  bot.action(/^maccontract:/, async (ctx) => {
+    const state = getSession(ctx);
+    const contract = await selectByCallback(ctx, 'maccontract', 'mac_contract_choose', 'contract', 'mac_login_loading', c => `Contrato ${c.id}. Buscando login...`);
+    if (!contract) return;
+    const logins = (await ixc.findPppoeLoginsByContract(contract.id)).filter(l => String(l.id_contrato) === String(contract.id) && String(l.id_cliente) === String(state.client.id));
+    if (!logins.length) {
+      state.step = 'mac_clear_failed';
+      await ctx.reply('Nao encontrei login vinculado a este cliente e contrato. Nenhum MAC foi alterado.', provisionKeyboard());
+    } else if (logins.length === 1) {
+      state.login = logins[0];
+      await askStandaloneMacConfirmation(ctx, state);
+    } else {
+      const token = setMenuChoices(state, logins, 'mac_login_choose');
+      await ctx.reply('Este contrato possui mais de um login. Escolha qual deve ter o MAC limpo:', rowsKeyboard('maclogin', logins, l => l.login, token));
+    }
+  });
+  bot.action(/^maclogin:/, async (ctx) => {
+    const state = getSession(ctx);
+    if (await selectByCallback(ctx, 'maclogin', 'mac_login_choose', 'login', 'mac_login_selected', l => `Login: ${l.login}`)) await askStandaloneMacConfirmation(ctx, state);
+  });
+  bot.action(/^clearmacconfirm:/, async (ctx) => {
+    const state = getSession(ctx);
+    if (currentMenuCallbackValue(state, 'clearmacconfirm', 'mac_clear_confirm', ctx.callbackQuery.data) === null) {
+      await answerBusyOrExpired(ctx, state);
+      return;
+    }
+    await ctx.answerCbQuery('Aguarde a limpeza');
+    await completeStandaloneMacClear(ctx, state, ixc, config);
   });
 
   const startBoxIdentification = async (ctx) => {
@@ -1619,6 +1703,25 @@ export const registerFlow = (bot, ixc, config) => {
   bot.on('text', async (ctx) => {
     const state = getSession(ctx);
     const text = ctx.message.text.trim();
+
+    if (state.step === 'mac_client_id') {
+      if (!/^\d+$/.test(text)) { await ctx.reply('Envie apenas o ID numerico do cliente.'); return; }
+      state.step = 'mac_client_loading';
+      try {
+        const client = await ixc.findClient(text);
+        if (!client) { state.step = 'mac_client_id'; await ctx.reply('Cliente nao encontrado. Confira o ID.'); return; }
+        state.client = client;
+        const contracts = filterContractsForService(await ixc.findContractsByClient(client.id), 'signal')
+          .filter(c => String(c.id_cliente) === String(client.id));
+        if (!contracts.length) { state.step = 'mac_client_id'; await ctx.reply('Cliente sem contratos ativos. Nenhum MAC foi alterado.'); return; }
+        const token = setMenuChoices(state, contracts, 'mac_contract_choose');
+        await ctx.reply(`Cliente: ${client.razao}\nEscolha o contrato para limpar o MAC:`, rowsKeyboard('maccontract', contracts, c => `Contrato ${c.id} - ${c.contrato || ''}`, token));
+      } catch {
+        state.step = 'mac_client_id';
+        await ctx.reply('Nao consegui consultar cliente e contratos no IXC. Nenhum MAC foi alterado. Tente novamente.');
+      }
+      return;
+    }
 
     if (state.step === 'service') {
       await askProvisionStart(ctx);

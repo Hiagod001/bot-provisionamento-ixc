@@ -24,6 +24,7 @@ import {
   handleSwapAfterContractChoice,
   POST_PROVISION_SIGNAL_DELAY_MS,
   completeRouterReplacement,
+  completeStandaloneMacClear,
   currentMenuCallbackValue,
   normalizeSerialFragment,
   parseMenuCallback,
@@ -59,6 +60,48 @@ Status potencia: Regular
 INFORMACOES ADICIONAIS:
 Tx olt: 2.29
 Rx olt: -26.58`;
+
+test('limpeza avulsa valida vinculos, limpa uma vez e confere MAC vazio', async () => {
+  const state = { step: 'mac_clear_confirm', client: { id: '10' }, contract: { id: '20' }, login: { id: '30' } };
+  const replies = [];
+  let cleared = 0;
+  const ixc = {
+    read: async table => table === 'cliente_contrato' ? { id: '20', id_cliente: '10', status: 'A' } : { id: '30', id_cliente: '10', id_contrato: '20', login: 'teste', mac: cleared ? '' : 'AA:BB' },
+    clearLoginMac: async id => { assert.equal(id, '30'); cleared++; return { type: 'success' }; },
+  };
+  const ctx = { reply: async text => replies.push(text) };
+  assert.equal(await completeStandaloneMacClear(ctx, state, ixc, { dryRun: false }), true);
+  assert.equal(await completeStandaloneMacClear(ctx, state, ixc, { dryRun: false }), false);
+  assert.equal(cleared, 1);
+  assert.match(replies.at(-1), /limpo e conferido/);
+});
+
+test('limpeza avulsa bloqueia vinculo alterado e respeita simulacao', async () => {
+  for (const dryRun of [false, true]) {
+    let cleared = 0;
+    const state = { step: 'mac_clear_confirm', client: { id: '10' }, contract: { id: '20' }, login: { id: '30' } };
+    const ixc = {
+      read: async table => table === 'cliente_contrato' ? { id: '20', id_cliente: '10', status: 'A' } : { id: '30', id_cliente: '10', id_contrato: dryRun ? '20' : '99', mac: 'AA' },
+      clearLoginMac: async () => { cleared++; },
+    };
+    await completeStandaloneMacClear({ reply: async () => {} }, state, ixc, { dryRun });
+    assert.equal(cleared, 0);
+  }
+});
+
+test('limpeza avulsa nao anuncia sucesso com erro IXC ou MAC persistente', async () => {
+  for (const type of ['error', 'success']) {
+    const replies = [];
+    const state = { step: 'mac_clear_confirm', client: { id: '10' }, contract: { id: '20' }, login: { id: '30' } };
+    const ixc = {
+      read: async table => table === 'cliente_contrato' ? { id: '20', id_cliente: '10', status: 'A' } : { id: '30', id_cliente: '10', id_contrato: '20', mac: 'AA' },
+      clearLoginMac: async () => ({ type }),
+    };
+    assert.equal(await completeStandaloneMacClear({ reply: async text => replies.push(text) }, state, ixc, { dryRun: false }), false);
+    assert.equal(state.step, 'mac_clear_failed');
+    assert.doesNotMatch(replies.at(-1), /MAC limpo e conferido/);
+  }
+});
 
 test('etapa critica pode ser assumida somente uma vez', () => {
   const state = { step: 'titularity_confirm' };
