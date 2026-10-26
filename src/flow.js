@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHmac } from 'node:crypto';
 import { isAllowedProvisionBox, selectProfilesForOlt } from './ixcClient.js';
 import { fileURLToPath } from 'node:url';
 
@@ -39,6 +39,15 @@ import {
 } from './format.js';
 
 const sessions = new Map();
+const auditSalt = randomUUID();
+
+export const classifyFlowError = (error) => {
+  const text = String(error?.message || '');
+  if (/Resposta invalida ao consultar/.test(text)) return 'ixc_invalid_response';
+  if (/timeout|ETIMEDOUT|ECONNABORTED/i.test(`${error?.code || ''} ${text}`)) return 'timeout';
+  if (/permiss|authoriz/i.test(text)) return 'permission';
+  return 'operation_failed';
+};
 
 export const formatBoxIdentification = (boxes) => boxes.length
   ? `Caixas cadastradas proximas (ate 300 m):\n\n${boxes.map((box, i) => `${i + 1}. ${box.descricao || box.nome || 'Caixa sem nome'} — ${box.distanceMeters} m`).join('\n')}\n\nA mais proxima e uma candidata, nao uma identificacao garantida. Confira o ponto em campo: o GPS e as coordenadas do cadastro podem ter diferenca.\nEnvie outra localizacao para consultar novamente ou /cancelar para sair.`
@@ -1066,7 +1075,24 @@ export const registerFlow = (bot, ixc, config) => {
       await ctx.reply('Telegram nao autorizado.');
       return;
     }
-    return next();
+    const before = getSession(ctx).step;
+    const started = Date.now();
+    let errorCode;
+    try {
+      return await next();
+    } catch (error) {
+      errorCode = classifyFlowError(error);
+      throw error;
+    } finally {
+      const state = getSession(ctx);
+      console.log(JSON.stringify({
+        event: 'flow_transition', at: new Date().toISOString(),
+        session: createHmac('sha256', auditSalt).update(String(sessionKey(ctx))).digest('hex').slice(0, 16),
+        from: before, to: state.step, service: state.serviceType,
+        input: ctx.callbackQuery ? 'button' : ctx.message?.location ? 'location' : 'message',
+        durationMs: Date.now() - started, errorCode,
+      }));
+    }
   });
 
   bot.start(async (ctx) => {
@@ -1637,6 +1663,7 @@ export const registerFlow = (bot, ixc, config) => {
         error?.code || '',
         error?.message || error
       );
+      console.log(JSON.stringify({ event: 'flow_operation_error', at: new Date().toISOString(), step: state.step, service: state.serviceType, errorCode: classifyFlowError(error) }));
       state.step = 'retry';
       const reason = String(error?.message || 'Falha ao consultar o IXC.')
         .replace(/<[^>]+>/g, ' ')

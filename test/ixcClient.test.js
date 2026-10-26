@@ -25,6 +25,7 @@ import {
   POST_PROVISION_SIGNAL_DELAY_MS,
   completeRouterReplacement,
   completeStandaloneMacClear,
+  classifyFlowError,
   currentMenuCallbackValue,
   normalizeSerialFragment,
   parseMenuCallback,
@@ -101,6 +102,26 @@ test('limpeza avulsa nao anuncia sucesso com erro IXC ou MAC persistente', async
     assert.equal(state.step, 'mac_clear_failed');
     assert.doesNotMatch(replies.at(-1), /MAC limpo e conferido/);
   }
+});
+
+test('consulta estrita aceita resultado vazio real do IXC sem registros', async () => {
+  const client = Object.create(IxcClient.prototype);
+  for (const total of ['0', 0]) {
+    client.http = { get: async () => ({ data: { page: '1', total } }) };
+    assert.deepEqual(await client.findFiberClientsByContract('1'), []);
+    assert.deepEqual(await client.findFiberClientsByLogin('1'), []);
+    assert.deepEqual(await client.findPppoeLoginsByContract('1'), []);
+  }
+  for (const data of [{ page: '1', total: '0', type: 'error', message: 'Sem permissao' }, { total: 0 }, { page: '1', total: '2' }, '<html>login</html>']) {
+    client.http = { get: async () => ({ data }) };
+    await assert.rejects(() => client.findFiberClientsByContract('1'));
+  }
+});
+
+test('auditoria classifica erros sem copiar dados sensiveis', () => {
+  assert.equal(classifyFlowError(new Error('Resposta invalida ao consultar radpop_radio_cliente_fibra')), 'ixc_invalid_response');
+  assert.equal(classifyFlowError({ code: 'ETIMEDOUT' }), 'timeout');
+  assert.equal(classifyFlowError(new Error('Segredo qualquer')), 'operation_failed');
 });
 
 test('etapa critica pode ser assumida somente uma vez', () => {

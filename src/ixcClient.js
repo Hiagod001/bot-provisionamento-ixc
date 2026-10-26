@@ -469,6 +469,10 @@ export class IxcClient {
           && /^nenhuma onu disponivel\.?$/i.test(String(response.data?.message || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim())) return [];
       assertNotIxcError(response.data, `consultar ${table}`);
       const data = response.data;
+      // IXC omits registros entirely for a successful empty result.
+      if (data && typeof data === 'object' && !Array.isArray(data) &&
+          ['0', 0].includes(data.total) && /^[1-9]\d*$/.test(String(data.page)) &&
+          Object.keys(data).every(key => ['page', 'total'].includes(key))) return [];
       if (![data, data?.rows, data?.registros, data?.data].some(Array.isArray)) {
         throw new Error(`Resposta invalida ao consultar ${table}.`);
       }
