@@ -6,9 +6,11 @@ async function api(path, body) {
   const response = await fetch(path, body === undefined ? { cache: 'no-store' } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const data = await response.json();
   if (response.status === 401) {
+    const hadSession = sequence > 0 || !!pending;
     $('login').hidden = false; $('workspace').hidden = true;
     $('messages').replaceChildren(); $('choices').replaceChildren(); sequence = 0;
     clearTimeout(timer);
+    if (path.startsWith('/api/state') && !hadSession) data.error = 'Entre com a senha de acesso.';
   }
   if (!response.ok) throw Error(data.error || 'Falha na comunicação');
   return data;
@@ -38,10 +40,11 @@ async function refresh() {
     $('login').hidden = true; $('workspace').hidden = false;
     for (const message of data.messages) render(message);
     sequence = data.sequence; busy = data.busy;
+    if (!pending) $('retry').hidden = true;
     status(busy ? 'Processando no servidor. Aguarde…' : 'Pronto.');
     controls();
     if (busy) timer = setTimeout(refresh, 3000);
-  } catch (error) { status(error.message + ' Use Atualizar para reconectar.'); $('retry').hidden = false; }
+  } catch (error) { status(error.message + ($('login').hidden ? ' Use Atualizar para reconectar.' : '')); $('retry').hidden = !$('login').hidden; }
 }
 async function sendPending() {
   if (!pending || sending) return;

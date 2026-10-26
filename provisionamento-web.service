@@ -4,8 +4,8 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-WorkingDirectory=/home/agenda/apps/bot-provisionamento-ixc
-EnvironmentFile=/home/agenda/apps/bot-provisionamento-ixc/.env.web
+WorkingDirectory=/home/agenda/apps/provisionamento-web/current
+EnvironmentFile=/home/agenda/apps/provisionamento-web/.env.web
 ExecStart=/home/agenda/.nvm/versions/node/v24.13.0/bin/node src/web.js
 Restart=always
 RestartSec=10
