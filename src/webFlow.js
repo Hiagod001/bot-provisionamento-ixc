@@ -16,8 +16,20 @@ export function createWebFlow(ixc, config) {
     create: () => ({ id: `web:${randomUUID()}`, messages: [], receipts: new Map(), busy: false, sequence: 0 }),
     dispose: session => releaseFlowSession(session.id),
     async dispatch(session, input) {
+      if (input.text === '/start' && session.atMenu) return;
+      if (input.text === '/start') {
+        session.messages = [];
+        session.resetAfter = session.sequence;
+        session.atMenu = true;
+      } else {
+        session.atMenu = false;
+        const buttons = session.messages.flatMap(m => m.keyboard?.inline_keyboard?.flat() || []);
+        const label = input.callback ? [...buttons].reverse().find(b => b.callback_data === input.callback)?.text : null;
+        session.messages.push({ id: ++session.sequence, role: 'user', text: input.location ? '📍 Localização enviada' : label || input.text || 'Opção selecionada' });
+        session.messages = session.messages.slice(-40);
+      }
       const reply = async (text, options = {}) => {
-        session.messages.push({ id: ++session.sequence, text: String(text), keyboard: options.reply_markup || null });
+        session.messages.push({ id: ++session.sequence, role: 'assistant', text: String(text), keyboard: options.reply_markup || null });
         session.messages = session.messages.slice(-40);
         return { message_id: session.sequence };
       };

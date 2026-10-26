@@ -8,7 +8,7 @@ async function api(path, body) {
   if (response.status === 401) {
     const hadSession = sequence > 0 || !!pending;
     $('login').hidden = false; $('workspace').hidden = true;
-    $('messages').replaceChildren(); $('choices').replaceChildren(); sequence = 0;
+    $('composer').before($('choices')); $('choices').replaceChildren(); $('messages').replaceChildren(); sequence = 0;
     clearTimeout(timer);
     if (path.startsWith('/api/state') && !hadSession) data.error = 'Entre com a senha de acesso.';
   }
@@ -19,11 +19,16 @@ function controls() {
   for (const element of document.querySelectorAll('#choices button,#entry button,#text,#location,#menu,#logout')) element.disabled = busy || sending || !!pending;
 }
 function render(message) {
-  const card = document.createElement('div'); card.className = 'message'; card.textContent = message.text;
+  const card = document.createElement('div'); card.className = `message ${message.role === 'user' ? 'user-message' : 'bot-message'}`;
+  const author = document.createElement('span'); author.className = 'message-author'; author.textContent = message.role === 'user' ? 'Você' : 'Uai • Assistente';
+  const content = document.createElement('div'); content.textContent = message.text;
+  card.append(author, content);
+  if (message.role === 'user') $('choices').replaceChildren();
   $('messages').append(card);
   const keyboard = message.keyboard;
   if (keyboard?.inline_keyboard) {
     $('choices').replaceChildren();
+    card.append($('choices'));
     for (const row of keyboard.inline_keyboard) for (const choice of row) {
       const button = document.createElement('button'); button.type = 'button'; button.textContent = choice.text;
       if (choice.copy_text) {
@@ -31,18 +36,25 @@ function render(message) {
       } else if (choice.callback_data) { button.onclick = () => act({ callback: choice.callback_data }); $('choices').append(button); }
     }
   } else if (keyboard?.remove_keyboard) $('choices').replaceChildren();
-  while ($('messages').children.length > 40) $('messages').firstChild.remove();
+  while ($('messages').children.length > 40) {
+    if ($('messages').firstChild.contains($('choices'))) $('composer').before($('choices'));
+    $('messages').firstChild.remove();
+  }
 }
 async function refresh() {
   clearTimeout(timer);
   try {
     const data = await api(`/api/state?after=${sequence}`);
     $('login').hidden = true; $('workspace').hidden = false;
+    if (sequence <= data.resetAfter && data.resetAfter > 0) {
+      $('composer').before($('choices')); $('choices').replaceChildren(); $('messages').replaceChildren();
+    }
     for (const message of data.messages) render(message);
     sequence = data.sequence; busy = data.busy;
     if (!pending) $('retry').hidden = true;
     status(busy ? 'Processando no servidor. Aguarde…' : 'Pronto.');
     controls();
+    if (data.messages.length) $('messages').scrollTop = $('messages').scrollHeight;
     if (busy) timer = setTimeout(refresh, 3000);
   } catch (error) { status(error.message + ($('login').hidden ? ' Use Atualizar para reconectar.' : '')); $('retry').hidden = !$('login').hidden; }
 }

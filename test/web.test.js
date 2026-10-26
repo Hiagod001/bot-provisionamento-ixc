@@ -24,6 +24,25 @@ async function setup(t, flow) {
 }
 const fakeFlow = () => ({ create: () => ({ messages: [], receipts: new Map(), busy: false, sequence: 0 }), dispose() {}, async dispatch() {} });
 
+test('Menu repetido nao duplica saudacao; retorno inicia conversa limpa com sequencia monotona', async () => {
+  const flow = createWebFlow({}, { dryRun: true, allowedTelegramIds: [] });
+  const s = flow.create();
+  await flow.dispatch(s, { text: '/start' });
+  for (let i = 0; i < 20; i++) await flow.dispatch(s, { text: '/start' });
+  assert.equal(s.messages.length, 1);
+  await flow.dispatch(s, { callback: 'clearmac:start' });
+  assert.equal(s.messages[1].role, 'user');
+  assert.equal(s.messages[1].text, 'Limpar MAC');
+  const previous = s.sequence;
+  await flow.dispatch(s, { text: '/start' });
+  assert.equal(s.messages.length, 1);
+  assert.equal(s.resetAfter, previous);
+  assert.ok(s.sequence > previous);
+  await flow.dispatch(s, { text: '/start' });
+  assert.equal(s.messages.length, 1);
+  flow.dispose(s);
+});
+
 test('web exige login, bloqueia CSRF e limita tentativas', async t => {
   const { base, post } = await setup(t, fakeFlow());
   assert.equal((await fetch(base + '/api/state')).status, 401);

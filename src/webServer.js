@@ -14,7 +14,7 @@ export const verifyWebPassword = (password, hash) => {
 export function createWebServer({ flow, passwordHash, origin, secure = true, ttlMs = 8 * 3600000 }) {
   if (!passwordHash || !origin || (secure && !origin.startsWith('https://'))) throw Error('WEB_PASSWORD_HASH e WEB_ORIGIN HTTPS obrigatorios');
   const sessions = new Map(), attempts = new Map();
-  const assets = new Map(['/index.html', '/app.js', '/style.css', '/brand.css', '/uai-logo.png'].map(path => [path, readFileSync(new URL(`../web${path}`, import.meta.url))]));
+  const assets = new Map(['/index.html', '/app.js', '/style.css', '/brand.css', '/chat.css', '/uai-logo.png'].map(path => [path, readFileSync(new URL(`../web${path}`, import.meta.url))]));
   const cookie = (value, age) => `web_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${secure ? '; Secure' : ''}`;
   const clean = setInterval(() => {
     const now = Date.now();
@@ -73,7 +73,7 @@ export function createWebServer({ flow, passwordHash, origin, secure = true, ttl
       }
       if (req.method === 'GET' && path === '/api/state') {
         const after = Number(new URL(req.url, origin).searchParams.get('after') || 0);
-        return send(200, { busy: s.flow.busy, messages: s.flow.messages.filter(m => m.id > after), sequence: s.flow.sequence });
+        return send(200, { busy: s.flow.busy, resetAfter: s.flow.resetAfter || 0, messages: s.flow.messages.filter(m => m.id > after), sequence: s.flow.sequence });
       }
       if (req.method === 'POST' && path === '/api/action') {
         if (!/^[a-f0-9-]{36}$/.test(body.requestId || '')) return send(400, { error: 'Solicitacao invalida' });
