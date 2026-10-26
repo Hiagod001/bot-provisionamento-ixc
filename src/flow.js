@@ -39,6 +39,7 @@ import {
 } from './format.js';
 
 const sessions = new Map();
+export const releaseFlowSession = (key) => sessions.delete(String(key));
 const auditSalt = randomUUID();
 
 export const classifyFlowError = (error) => {

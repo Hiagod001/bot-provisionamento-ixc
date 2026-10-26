@@ -1,0 +1,12 @@
+import 'dotenv/config';
+import { config } from './config.js';
+import { IxcClient } from './ixcClient.js';
+import { createWebFlow } from './webFlow.js';
+import { createWebServer } from './webServer.js';
+const port = Number(process.env.WEB_PORT || 3080);
+const host = process.env.WEB_HOST || '127.0.0.1';
+const origin = process.env.WEB_ORIGIN || `http://127.0.0.1:${port}`;
+if (!origin.startsWith('https://') && (!['127.0.0.1', 'localhost'].includes(new URL(origin).hostname) || host !== '127.0.0.1')) throw Error('HTTPS obrigatorio fora do ambiente local');
+const server = createWebServer({ flow: createWebFlow(new IxcClient(config.ixc), config), passwordHash: process.env.WEB_PASSWORD_HASH, origin, secure: origin.startsWith('https://') });
+server.listen(port, host, () => console.log(`Web disponivel em ${origin}; DRY_RUN=${config.dryRun}`));
+process.on('SIGTERM', () => server.close());
