@@ -27,6 +27,11 @@ const fakeFlow = () => ({ create: () => ({ messages: [], receipts: new Map(), bu
 test('web exige login, bloqueia CSRF e limita tentativas', async t => {
   const { base, post } = await setup(t, fakeFlow());
   assert.equal((await fetch(base + '/api/state')).status, 401);
+  const logo = await fetch(base + '/uai-logo.png');
+  assert.equal(logo.headers.get('content-type'), 'image/png');
+  assert.match(logo.headers.get('cache-control'), /max-age=86400/);
+  assert.match(logo.headers.get('content-security-policy'), /img-src 'self'/);
+  assert.equal((await fetch(base + '/brand.css')).status, 200);
   assert.equal((await post('/api/login', { password: 'test-only-password' }, '', 'https://evil.invalid')).status, 403);
   for (let i = 0; i < 5; i++) assert.equal((await post('/api/login', { password: 'wrong' })).status, 401);
   assert.equal((await post('/api/login', { password: 'test-only-password' })).status, 429);

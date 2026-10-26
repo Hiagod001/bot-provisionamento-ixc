@@ -14,7 +14,7 @@ export const verifyWebPassword = (password, hash) => {
 export function createWebServer({ flow, passwordHash, origin, secure = true, ttlMs = 8 * 3600000 }) {
   if (!passwordHash || !origin || (secure && !origin.startsWith('https://'))) throw Error('WEB_PASSWORD_HASH e WEB_ORIGIN HTTPS obrigatorios');
   const sessions = new Map(), attempts = new Map();
-  const assets = new Map(['/index.html', '/app.js', '/style.css'].map(path => [path, readFileSync(new URL(`../web${path}`, import.meta.url))]));
+  const assets = new Map(['/index.html', '/app.js', '/style.css', '/brand.css', '/uai-logo.png'].map(path => [path, readFileSync(new URL(`../web${path}`, import.meta.url))]));
   const cookie = (value, age) => `web_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${secure ? '; Secure' : ''}`;
   const clean = setInterval(() => {
     const now = Date.now();
@@ -26,14 +26,15 @@ export function createWebServer({ flow, passwordHash, origin, secure = true, ttl
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     const send = (status, body) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(body)); };
     try {
       const path = new URL(req.url, origin).pathname;
       if (req.method === 'GET' && (path === '/' || assets.has(path))) {
         const key = path === '/' ? '/index.html' : path;
         const body = assets.get(key);
-        res.setHeader('Content-Type', key.endsWith('.js') ? 'text/javascript; charset=utf-8' : key.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8');
+        res.setHeader('Content-Type', key.endsWith('.png') ? 'image/png' : key.endsWith('.js') ? 'text/javascript; charset=utf-8' : key.endsWith('.css') ? 'text/css' : 'text/html; charset=utf-8');
+        if (key.endsWith('.png')) { res.setHeader('Cache-Control', 'public, max-age=86400'); res.end(body); return; }
         if (/\bgzip\b/.test(req.headers['accept-encoding'] || '')) { res.setHeader('Content-Encoding', 'gzip'); res.end(gzipSync(body)); }
         else res.end(body);
         return;
