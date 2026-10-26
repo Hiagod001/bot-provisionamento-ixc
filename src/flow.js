@@ -27,6 +27,7 @@ import {
   buildSummary,
   buildTitularitySuccessMessage,
   contractAddress,
+  contractButtonLabel,
   formatAuthorizedOnu,
   formatContract,
   formatLogin,
@@ -173,7 +174,7 @@ export const currentMenuCallbackValue = (state, prefix, expectedStep, data) => {
 export const selectContractByNumber = (state, text) => {
   if (state.step !== 'contract_choose' || !/^[1-9]\d*$/.test(text)) return null;
   const index = Number(text) - 1;
-  const contract = state.matches.slice(0, 10)[index];
+  const contract = state.matches.slice(0, 30)[index];
   if (!contract) return null;
   state.contract = contract;
   clearMenuChoices(state);
@@ -235,7 +236,7 @@ const showClientContractSignal = async (ctx, state, ixc) => {
   if (!fibers.length) {
     resetSession(ctx);
     await ctx.reply(
-      `Contrato ${short(state.contract.id)} sem ONU cadastrada.`,
+      `${formatContract(state.contract, state.client)}\nSem ONU cadastrada.`,
       signalResultKeyboard()
     );
     return;
@@ -246,6 +247,7 @@ const showClientContractSignal = async (ctx, state, ixc) => {
     'Sinal do cliente',
     short(state.client?.razao),
     `Cliente: ${short(state.client?.id)} | Contrato: ${short(state.contract?.id)}`,
+    `Endereco: ${contractAddress(state.contract, state.client)}`,
   ].join('\n');
   resetSession(ctx);
   await sendSignalReport(ctx, title, reports, { showBox: true });
@@ -266,6 +268,7 @@ const askRouterReplacementConfirmation = async (ctx, state) => {
       'Confirmar troca do roteador:',
       `Cliente: ${short(state.client?.razao)}`,
       `Contrato: ${short(state.contract?.id)}`,
+      `Endereco: ${contractAddress(state.contract, state.client)}`,
       `PPPoE: ${short(state.login?.login)}`,
       '',
       'O bot vai limpar somente o MAC do PPPoE e abrir a OS de troca do roteador.',
@@ -407,6 +410,14 @@ const pickSingleOrAsk = async (ctx, state, rows, field, step, prefix, message, l
   return false;
 };
 
+export const sendContractOptions = async (ctx, contracts, client, prefix, token) => {
+  const visible = contracts.slice(0, 30);
+  for (let offset = 0; offset < visible.length; offset += 5) {
+    const text = visible.slice(offset, offset + 5).map((c, i) => `${offset + i + 1}. ${formatContract(c, client)}`).join('\n\n');
+    await ctx.reply(text, offset + 5 >= visible.length ? rowsKeyboard(prefix, visible, (c, i) => contractButtonLabel(c, client, i), token) : undefined);
+  }
+};
+
 const askContractChoice = async (ctx, state, contracts, client) => {
   if (contracts.length === 1) {
     state.contract = contracts[0];
@@ -419,21 +430,8 @@ const askContractChoice = async (ctx, state, contracts, client) => {
 
   const menuToken = setMenuChoices(state, contracts, 'contract_choose');
 
-  const list = contracts
-    .slice(0, 10)
-    .map((contract, index) => `${index + 1}. ${formatContract(contract, client)}`)
-    .join('\n\n');
-
-  await ctx.reply(
-    `Cliente: ${short(client.razao)}\n\nContratos:\n\n${list}`,
-    rowsKeyboard(
-      'contract',
-      contracts,
-      (contract, index) =>
-        `${index + 1} - ${contract.id} - ${contract.contrato || contract.status || 'contrato'}`,
-      menuToken
-    )
-  );
+  await ctx.reply(`Cliente: ${short(client.razao)}\nEscolha o contrato pelo endereco:`);
+  await sendContractOptions(ctx, contracts, client, 'contract', menuToken);
   return false;
 };
 
@@ -619,7 +617,7 @@ export const completeStandaloneMacClear = async (ctx, state, ixc, config) => {
     }
     state.step = 'mac_clear_done';
     console.log(JSON.stringify({ event: 'standalone_mac_clear', at: new Date().toISOString(), clientId: state.client.id, contractId: contract.id, loginId: login.id }));
-    await ctx.reply(`MAC limpo e conferido no IXC.\nContrato: ${contract.id}\nLogin: ${login.login}`, provisionKeyboard());
+    await ctx.reply(`MAC limpo e conferido no IXC.\nContrato: ${contract.id}\nEndereco: ${contractAddress(contract, state.client)}\nLogin: ${login.login}`, provisionKeyboard());
     return true;
   } catch (error) {
     state.step = 'mac_clear_failed';
@@ -630,7 +628,7 @@ export const completeStandaloneMacClear = async (ctx, state, ixc, config) => {
 
 const askStandaloneMacConfirmation = async (ctx, state) => {
   const token = setMenuChoices(state, [state.login], 'mac_clear_confirm');
-  await ctx.reply(`Cliente: ${state.client.razao}\nContrato: ${state.contract.id}\nLogin: ${state.login.login}\n\nConfirma limpar o MAC deste login? Nenhuma ONU sera removida. Para cancelar, envie /cancelar.`,
+  await ctx.reply(`Cliente: ${state.client.razao}\n${formatContract(state.contract, state.client)}\nLogin: ${state.login.login}\n\nConfirma limpar o MAC deste login? Nenhuma ONU sera removida. Para cancelar, envie /cancelar.`,
     rowsKeyboard('clearmacconfirm', [state.login], () => 'Confirmar limpeza do MAC', token));
 };
 
@@ -1149,7 +1147,7 @@ export const registerFlow = (bot, ixc, config) => {
   });
   bot.action(/^maccontract:/, async (ctx) => {
     const state = getSession(ctx);
-    const contract = await selectByCallback(ctx, 'maccontract', 'mac_contract_choose', 'contract', 'mac_login_loading', c => `Contrato ${c.id}. Buscando login...`);
+    const contract = await selectByCallback(ctx, 'maccontract', 'mac_contract_choose', 'contract', 'mac_login_loading', c => `${formatContract(c, state.client)}\nBuscando login...`);
     if (!contract) return;
     const logins = (await ixc.findPppoeLoginsByContract(contract.id)).filter(l => String(l.id_contrato) === String(contract.id) && String(l.id_cliente) === String(state.client.id));
     if (!logins.length) {
@@ -1743,7 +1741,8 @@ export const registerFlow = (bot, ixc, config) => {
           .filter(c => String(c.id_cliente) === String(client.id));
         if (!contracts.length) { state.step = 'mac_client_id'; await ctx.reply('Cliente sem contratos ativos. Nenhum MAC foi alterado.'); return; }
         const token = setMenuChoices(state, contracts, 'mac_contract_choose');
-        await ctx.reply(`Cliente: ${client.razao}\nEscolha o contrato para limpar o MAC:`, rowsKeyboard('maccontract', contracts, c => `Contrato ${c.id} - ${c.contrato || ''}`, token));
+        await ctx.reply(`Cliente: ${client.razao}\nEscolha o contrato para limpar o MAC pelo endereco:`);
+        await sendContractOptions(ctx, contracts, client, 'maccontract', token);
       } catch {
         state.step = 'mac_client_id';
         await ctx.reply('Nao consegui consultar cliente e contratos no IXC. Nenhum MAC foi alterado. Tente novamente.');
@@ -1802,19 +1801,8 @@ export const registerFlow = (bot, ixc, config) => {
       }
 
       const menuToken = setMenuChoices(state, contracts, 'signal_contract_choose');
-      const contractList = contracts
-        .slice(0, 10)
-        .map((contract, index) => `${index + 1}. ${formatContract(contract, client)}`)
-        .join('\n\n');
-      await ctx.reply(
-        `Cliente: ${short(client.razao)}\n\nContratos:\n\n${contractList}`,
-        rowsKeyboard(
-          'signalcontract',
-          contracts,
-          (_contract, index) => `Contrato ${index + 1}`,
-          menuToken
-        )
-      );
+      await ctx.reply(`Cliente: ${short(client.razao)}\nEscolha o contrato pelo endereco:`);
+      await sendContractOptions(ctx, contracts, client, 'signalcontract', menuToken);
       return;
     }
 

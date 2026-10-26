@@ -11,15 +11,24 @@ export const serviceLabel = (value) =>
     titularidade: 'Troca de titularidade',
   })[value] ?? value;
 
+const contractAddressSource = (contract, client) =>
+  client && (contract?.endereco_padrao_cliente === 'S' || (!contract?.endereco && contract?.endereco_padrao_cliente !== 'N')) ? client : (contract || {});
+
+export const contractButtonLabel = (contract, client = null, index = 0) => {
+  const source = contractAddressSource(contract, client);
+  const prefix = `${index + 1} · ${short(contract.id)} · `;
+  const number = `, ${short(source.numero, 'nº ?')}`;
+  const street = short(source.endereco, 'Rua nao informada');
+  const budget = Math.max(8, 60 - prefix.length - number.length);
+  return prefix + (street.length > budget ? street.slice(0, budget - 1) + '…' : street) + number;
+};
+
 export const contractAddress = (contract, client = null) => {
-  const source =
-    client && (!contract.endereco || contract.endereco_padrao_cliente === 'S')
-      ? client
-      : contract;
+  const source = contractAddressSource(contract, client);
 
   const parts = [
-    source.endereco,
-    source.numero,
+    short(source.endereco, 'Rua nao informada'),
+    short(source.numero, 'numero nao informado'),
     source.bairro,
     source.cidade_nome || (source.cidade ? `cidade ${source.cidade}` : ''),
     source.cep ? `CEP ${source.cep}` : '',
@@ -101,6 +110,7 @@ export const buildSummary = (state) =>
     `OLT: ${short(state.olt?.descricao || state.olt?.olt_nome || state.onu?.olt_nome || state.onu?.id_olt)}`,
     `Caixa/porta: ${short(state.box?.descricao)} / ${short(state.dropPort)}`,
     `Cliente: ${short(state.client?.razao)} | Contrato ${short(state.contract?.id)}`,
+    `Endereco: ${contractAddress(state.contract, state.client)}`,
     `PPPoE: ${short(state.login?.login)}`,
     `Tipo da ONU: ${profileModeLabel(state.profile)}`,
   ].join('\n');
@@ -138,6 +148,7 @@ export const buildTitularitySuccessMessage = (state, fiber) =>
     `Senha: ${short(state.login?.senha)}`,
     '',
     `Cliente: ${short(state.client?.razao)} | Contrato ${short(state.contract?.id)}`,
+    `Endereco: ${contractAddress(state.contract, state.client)}`,
     `Script: ${short(state.profile?.nome)} (ID ${short(state.profile?.id)})`,
     `Caixa/porta: ${short(fiber?.caixa_nome || state.oldFiber?.caixa_nome, 'Nome nao encontrado')}/${short(fiber?.porta_ftth || state.oldFiber?.porta_ftth)}`,
     `ONU: ${short(fiber?.mac || state.oldFiber?.mac)}`,

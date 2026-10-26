@@ -9,7 +9,7 @@
     "web": "node src/web.js",
     "dev": "nodemon src/index.js",
     "check": "node --check src/index.js && node --check src/ixcClient.js && node --check src/flow.js && node --check src/config.js && node --check src/web.js && node --check src/webFlow.js && node --check src/webServer.js && node --check web/app.js",
-    "test": "node --test test/ixcClient.test.js test/messageCleanup.test.js test/web.test.js"
+    "test": "node --test test/ixcClient.test.js test/messageCleanup.test.js test/web.test.js test/contractAddress.test.js"
   },
   "dependencies": {
     "axios": "^1.7.9",
