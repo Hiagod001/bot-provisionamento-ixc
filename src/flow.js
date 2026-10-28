@@ -387,14 +387,20 @@ const askOldFiberRemoval = async (ctx, state) => {
   );
 };
 
-const askSwapOldFiberRemoval = async (ctx, state) => {
+export const hasSwapBoxAndPort = (fiber) => Number(fiber?.id_caixa_ftth) > 0 && Number(fiber?.porta_ftth) > 0;
+const missingSwapLocationMessage = 'Cliente sem caixa e porta no cadastro. Confirmar primeiro com o NOC. A troca foi interrompida sem remover a ONU.';
+
+export const askSwapOldFiberRemoval = async (ctx, state) => {
+  if (!isSgaOnu(state) && !hasSwapBoxAndPort(state.oldFiber)) {
+    state.step = 'swap_lookup_blocked';
+    await ctx.reply(missingSwapLocationMessage);
+    return;
+  }
   state.step = 'swap_oldfiber_confirm';
   await ctx.reply(
     `${formatAuthorizedOnu(state.oldFiber)}\n\n${isSgaOnu(state)
       ? 'Vou remover a ONU antiga e usar automaticamente a caixa sga-teste, sem definir porta.'
-      : !Number(state.oldFiber?.id_caixa_ftth)
-        ? 'Vou remover a ONU antiga e continuar a troca sem caixa e porta, como no cadastro antigo.'
-        : 'Vou remover a ONU antiga e manter a caixa e a porta cadastradas, quando informadas.'}`,
+      : 'Vou remover a ONU antiga e usar a mesma caixa/porta.'}`,
     swapOldFiberKeyboard()
   );
 };
@@ -919,11 +925,10 @@ export const buildProvisionPayload = (state) => {
     throw new Error('Perfil incompativel com a OLT FiberHome de Cruzeiro. Selecione um perfil CRZ.');
   }
   const sga = isSgaOnu(state);
-  const swapWithoutBox = state.serviceType === 'troca' && state.swapWithoutBox === true && !state.box;
   if (sga && !isSgaDefaultBox(state.box)) {
     throw new Error('A ONU de Sao Goncalo precisa usar a caixa sga-teste validada.');
   }
-  if (!sga && !swapWithoutBox && !isAllowedProvisionBox(state.box, state.onu?.id_olt || state.olt?.id)) {
+  if (!sga && !isAllowedProvisionBox(state.box, state.onu?.id_olt || state.olt?.id)) {
     throw new Error('A caixa escolhida nao pertence ao Projeto importacao. Selecione outra caixa.');
   }
 
@@ -932,9 +937,9 @@ export const buildProvisionPayload = (state) => {
     clienteFibra: {
     radpop_estrutura: 'N',
     id_transmissor: short(state.olt?.id || state.onu?.id_olt, ''),
-    id_caixa_ftth: swapWithoutBox ? '0' : short(state.box?.id, ''),
+    id_caixa_ftth: short(state.box?.id, ''),
     id_projeto: short(state.box?.id_projeto, ''),
-    porta_ftth: sga || swapWithoutBox ? '0' : short(state.dropPort, ''),
+    porta_ftth: sga ? '0' : short(state.dropPort, ''),
     id_contrato: short(state.contract?.id, ''),
     id_login: short(state.login?.id, ''),
     nome: short(state.client?.razao || state.login?.login || state.onu?.mac, 'ONU provisionada pelo bot'),
@@ -1435,14 +1440,22 @@ export const registerFlow = (bot, ixc, config) => {
       return;
     }
     const sgaBox = isSgaOnu(state) ? await loadSgaDefaultBox(ixc) : null;
-    const withoutBox = !Number(oldFiber.id_caixa_ftth);
-    const box = sgaBox || (withoutBox ? null : await ixc.read('rad_caixa_ftth', oldFiber.id_caixa_ftth));
-    if (!sgaBox && ((!withoutBox && (!box || box.status !== 'A' || !isAllowedProvisionBox(box, state.onu?.id_olt || state.olt?.id))) || String(oldFiber.id_transmissor) !== String(state.onu?.id_olt || state.olt?.id))) {
+    if (!sgaBox && !hasSwapBoxAndPort(oldFiber)) {
+      state.step = 'swap_lookup_blocked';
+      await ctx.answerCbQuery('Dados antigos incompletos');
+      await ctx.reply(
+        missingSwapLocationMessage
+      );
+      return;
+    }
+
+    const box = sgaBox || await ixc.read('rad_caixa_ftth', oldFiber.id_caixa_ftth);
+    if (!sgaBox && (!box || box.status !== 'A' || !isAllowedProvisionBox(box, state.onu?.id_olt || state.olt?.id) || String(oldFiber.id_transmissor) !== String(state.onu?.id_olt || state.olt?.id))) {
       state.step = 'swap_lookup_blocked';
       await ctx.reply('A caixa antiga nao pode ser reutilizada nesta OLT ou esta fora dos projetos permitidos. A troca foi interrompida sem remover a ONU. Acione o NOC; nao e necessario escolher outra caixa nesta troca.');
       return;
     }
-    console.log(JSON.stringify({ event: 'swap_preserve_box', at: new Date().toISOString(), contractId: state.contract.id, fiberId: oldFiber.id, boxId: box?.id || '0', port: sgaBox || withoutBox ? '0' : oldFiber.porta_ftth }));
+    console.log(JSON.stringify({ event: 'swap_preserve_box', at: new Date().toISOString(), contractId: state.contract.id, fiberId: oldFiber.id, boxId: box.id, port: sgaBox ? '0' : oldFiber.porta_ftth }));
     await ctx.answerCbQuery('Removendo equipamento antigo');
     await ctx.reply('Removendo o equipamento antigo. Aguarde a confirmacao antes de tentar novamente.');
     await ixc.removeAuthorizedOnu(oldFiber.id);
@@ -1454,9 +1467,12 @@ export const registerFlow = (bot, ixc, config) => {
       return;
     }
 
-    state.swapWithoutBox = withoutBox;
-    state.box = box;
-    state.dropPort = withoutBox ? '0' : String(oldFiber.porta_ftth || '0');
+    state.box = box || {
+      id: oldFiber.id_caixa_ftth,
+      descricao: 'Caixa sem nome',
+      capacidade: '',
+    };
+    state.dropPort = String(oldFiber.porta_ftth || '');
     state.oldFiber = null;
 
     console.log(`Equipamento antigo ${oldFiber.id} removido na troca de equipamento.`);
