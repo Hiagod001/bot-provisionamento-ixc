@@ -1,7 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { contractAddress, contractButtonLabel } from '../src/format.js';
-import { sendContractOptions } from '../src/flow.js';
+import { sendContractOptions, buildProvisionPayload } from '../src/flow.js';
+
+test('troca sem caixa antiga permite zeros sem liberar instalacao ou caixa de outro projeto', () => {
+  const state = { serviceType: 'troca', swapWithoutBox: true, box: null, olt: { id: '5' }, profile: { id: '1' } };
+  const payload = buildProvisionPayload(state);
+  assert.equal(payload.clienteFibra.id_caixa_ftth, '0');
+  assert.equal(payload.clienteFibra.porta_ftth, '0');
+  assert.throws(() => buildProvisionPayload({ ...state, serviceType: 'instalacao' }), /Projeto importacao/);
+  assert.throws(() => buildProvisionPayload({ ...state, swapWithoutBox: false }), /Projeto importacao/);
+  assert.throws(() => buildProvisionPayload({ ...state, box: { id: '10', id_projeto: '38' } }), /Projeto importacao/);
+});
 
 test('endereco proprio do contrato nao e substituido pelo endereco do cliente', () => {
   const client = { endereco: 'Rua do cliente', numero: '99' };
