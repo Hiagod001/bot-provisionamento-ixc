@@ -2,6 +2,56 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { contractAddress, contractButtonLabel } from '../src/format.js';
 import { sendContractOptions, askSwapOldFiberRemoval, hasSwapBoxAndPort, buildProvisionPayload } from '../src/flow.js';
+import { reprovisionExisting } from '../src/reprovision.js';
+import { createWebFlow } from '../src/webFlow.js';
+
+const reproFixture = () => {
+  const client = { id: '10' }, contract = { id: '20', id_cliente: '10', status: 'A', endereco: 'Rua Teste', numero: '77' }, login = { id: '30', id_cliente: '10', id_contrato: '20', login: 'teste' };
+  const fiber = { id: '40', id_contrato: '20', id_login: '30', mac: 'HWTC1234', id_transmissor: '5', id_perfil: '7', id_caixa_ftth: '123', porta_ftth: '2' };
+  const calls = [];
+  const ixc = {
+    read: async table => ({ cliente_contrato: contract, radusuarios: login, radpop_radio_cliente_fibra: { ...fiber } })[table],
+    ensureOnuAuthorizationApiAvailable: async () => {},
+    actionPost: async (action, data) => { calls.push([action, data.id]); return { type: 'success' }; },
+    authorizeOnu: async id => { calls.push(['authorize', id]); return { type: 'success' }; },
+    findClient: async () => client, findContractsByClient: async () => [contract], findPppoeLoginsByContract: async () => [login], findFiberClientsByLogin: async () => [fiber],
+  };
+  return { client, contract, login, fiber, ixc, calls };
+};
+
+test('reprovisiona o mesmo cadastro, preserva caixa e porta e respeita simulacao', async () => {
+  const f = reproFixture();
+  await reprovisionExisting(f.ixc, { ...f, dryRun: true });
+  assert.equal(f.calls.length, 0);
+  const result = await reprovisionExisting(f.ixc, f);
+  assert.deepEqual(f.calls, [['botao_excluir_dispositivo_22434', '40'], ['authorize', '40']]);
+  assert.equal(result.fiber.id_caixa_ftth, '123');
+});
+test('reprovisionamento bloqueia vinculo alterado e resposta inconclusiva', async () => {
+  const f = reproFixture();
+  await assert.rejects(reprovisionExisting(f.ixc, { ...f, client: { id: '99' } }), /vinculo alterado/);
+  assert.equal(f.calls.length, 0);
+  f.ixc.actionPost = async () => ({});
+  await assert.rejects(reprovisionExisting(f.ixc, f), /nao confirmou a desprovisao/);
+  assert.equal(f.calls.length, 0);
+});
+test('menu reprovisionar mostra endereco e cliques repetidos nao repetem operacao', async () => {
+  const f = reproFixture();
+  const flow = createWebFlow(f.ixc, { dryRun: false });
+  const session = flow.create();
+  try {
+    await flow.dispatch(session, { callback: 'repro:start' });
+    await flow.dispatch(session, { text: '10' });
+    assert.ok(session.messages.some(m => m.text.includes('Rua Teste, 77')));
+    const button = () => session.messages.at(-1).keyboard.inline_keyboard[0][0].callback_data;
+    await flow.dispatch(session, { callback: button() });
+    const confirm = button();
+    await flow.dispatch(session, { callback: confirm });
+    await flow.dispatch(session, { callback: confirm });
+    assert.equal(f.calls.length, 2);
+    assert.ok(session.messages.some(m => m.text.includes('IXC confirmou o reprovisionamento')));
+  } finally { flow.dispose(session); }
+});
 
 test('troca sem caixa ou porta orienta NOC antes de oferecer remocao', async () => {
   for (const fiber of [{}, { id_caixa_ftth: '0', porta_ftth: '1' }, { id_caixa_ftth: '1', porta_ftth: '0' }, { id_caixa_ftth: '', porta_ftth: '' }]) {

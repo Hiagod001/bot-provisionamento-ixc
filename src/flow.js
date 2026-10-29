@@ -1,6 +1,7 @@
 import { randomUUID, createHmac } from 'node:crypto';
 import { isAllowedProvisionBox, selectProfilesForOlt } from './ixcClient.js';
 import { fileURLToPath } from 'node:url';
+import { reprovisionExisting } from './reprovision.js';
 
 import {
   confirmKeyboard,
@@ -100,6 +101,7 @@ const resetSession = (ctx) => {
 };
 
 const processingSteps = new Set([
+  'repro_processing', 'repro_loading', 'repro_client_loading',
   'titularity_processing',
   'router_replace_processing',
   'provisioning',
@@ -1139,6 +1141,62 @@ export const registerFlow = (bot, ixc, config) => {
     await askSignalChoice(ctx);
   });
 
+  const startReprovision = async (ctx) => {
+    if (processingSteps.has(getSession(ctx).step)) { await ctx.reply('Processo em andamento. Aguarde.'); return; }
+    resetSession(ctx).step = 'repro_client_id';
+    await ctx.reply('Reprovisionar: envie o ID do cliente.');
+  };
+  bot.command('reprovisionar', startReprovision);
+  bot.action(/^repro:start$/, async ctx => { await ctx.answerCbQuery(); await startReprovision(ctx); });
+  const confirmReprovision = async (ctx, state) => {
+    const token = setMenuChoices(state, [state.reproFiber], 'repro_confirm');
+    await ctx.reply(`${formatContract(state.contract, state.client)}\nLogin: ${state.login.login}\nSerial: ${state.reproFiber.mac}\n\nConfirma desprovisionar e provisionar novamente este equipamento? A conexao sera interrompida durante o processo. Para cancelar, envie /cancelar.`, rowsKeyboard('reproconfirm', [state.reproFiber], () => 'Confirmar reprovisionamento', token));
+  };
+  bot.action(/^reprocontract:/, async ctx => {
+    const state = getSession(ctx);
+    const contract = await selectByCallback(ctx, 'reprocontract', 'repro_contract_choose', 'contract', 'repro_loading', c => `${formatContract(c, state.client)}\nBuscando fibra do login. Aguarde...`);
+    if (!contract) return;
+    try {
+      const logins = (await ixc.findPppoeLoginsByContract(contract.id)).filter(l => String(l.id_contrato) === String(contract.id) && String(l.id_cliente) === String(state.client.id));
+      const candidates = [];
+      for (const login of logins) {
+        for (const fiber of await ixc.findFiberClientsByLogin(login.id)) {
+          if (String(fiber.id_login) === String(login.id) && String(fiber.id_contrato) === String(contract.id)) candidates.push({ ...fiber, reproLogin: login });
+        }
+      }
+      if (!candidates.length) { state.step = 'repro_failed'; await ctx.reply('Nao encontrei cadastro de fibra vinculado ao login deste contrato. Confirme com o NOC.', provisionKeyboard()); return; }
+      if (candidates.length === 1) {
+        state.reproFiber = candidates[0]; state.login = candidates[0].reproLogin;
+        await confirmReprovision(ctx, state);
+      } else {
+        const token = setMenuChoices(state, candidates, 'repro_fiber_choose');
+        await ctx.reply('Escolha o equipamento deste contrato:', rowsKeyboard('reprofiber', candidates, f => `${f.reproLogin.login} — ${f.mac}`, token));
+      }
+    } catch { state.step = 'repro_failed'; await ctx.reply('Nao consegui conferir o cadastro de fibra. Nada foi alterado. Reinicie a consulta.', provisionKeyboard()); }
+  });
+  bot.action(/^reprofiber:/, async ctx => {
+    const state = getSession(ctx);
+    const fiber = await selectByCallback(ctx, 'reprofiber', 'repro_fiber_choose', 'reproFiber', 'repro_loading', f => `Equipamento: ${f.mac}`);
+    if (fiber) { state.login = fiber.reproLogin; await confirmReprovision(ctx, state); }
+  });
+  bot.action(/^reproconfirm:/, async ctx => {
+    const state = getSession(ctx);
+    if (currentMenuCallbackValue(state, 'reproconfirm', 'repro_confirm', ctx.callbackQuery.data) === null || !claimProcessingStep(state, 'repro_confirm', 'repro_processing')) { await answerBusyOrExpired(ctx, state); return; }
+    await ctx.answerCbQuery('Aguarde');
+    await ctx.reply('Reprovisionamento em andamento. Aguarde a confirmacao; nao clique novamente.');
+    try {
+      const result = await reprovisionExisting(ixc, { client: state.client, contract: state.contract, login: state.login, fiber: state.reproFiber, dryRun: config.dryRun });
+      state.step = 'repro_done';
+      if (result.simulated) { await ctx.reply('Simulacao concluida. Nenhum equipamento foi alterado.', provisionKeyboard()); return; }
+      state.provisionedOnu = result.fiber;
+      state.step = 'provisioned_signal_ready';
+      await ctx.reply(`IXC confirmou o reprovisionamento do equipamento ${result.fiber.mac}.\n${formatContract(state.contract, state.client)}\nAguarde a sincronizacao e use Conferir sinal para verificar a conexao.`, provisionedSignalKeyboard());
+    } catch (error) {
+      state.step = 'repro_failed';
+      await ctx.reply(`Nao foi possivel concluir o reprovisionamento. ${error.message}\nNao repita sem conferir com o NOC.`, provisionKeyboard());
+    }
+  });
+
   const startMacClear = async (ctx) => {
     if (processingSteps.has(getSession(ctx).step)) {
       await ctx.reply('Processo em andamento. Aguarde a conclusao.');
@@ -1737,6 +1795,23 @@ export const registerFlow = (bot, ixc, config) => {
   bot.on('text', async (ctx) => {
     const state = getSession(ctx);
     const text = ctx.message.text.trim();
+
+    if (state.step === 'repro_client_id') {
+      if (!/^\d+$/.test(text)) { await ctx.reply('Envie apenas o ID numerico do cliente.'); return; }
+      state.step = 'repro_client_loading';
+      try {
+        const client = await ixc.findClient(text);
+        if (!client) { state.step = 'repro_client_id'; await ctx.reply('Cliente nao encontrado. Confira o ID.'); return; }
+        state.client = client;
+        const contracts = filterContractsForService(await ixc.findContractsByClient(client.id), 'signal').filter(c => String(c.id_cliente) === String(client.id));
+        if (!contracts.length) { state.step = 'repro_client_id'; await ctx.reply('Cliente sem contratos ativos.'); return; }
+        await enrichCityNames(ixc, [client, ...contracts]);
+        const token = setMenuChoices(state, contracts, 'repro_contract_choose');
+        await ctx.reply(`Cliente: ${client.razao}\nEscolha o contrato pelo endereco:`);
+        await sendContractOptions(ctx, contracts, client, 'reprocontract', token);
+      } catch { state.step = 'repro_client_id'; await ctx.reply('Nao consegui consultar o cliente e contratos. Tente novamente.'); }
+      return;
+    }
 
     if (state.step === 'mac_client_id') {
       if (!/^\d+$/.test(text)) { await ctx.reply('Envie apenas o ID numerico do cliente.'); return; }
