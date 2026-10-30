@@ -106,6 +106,7 @@ export const buildSummary = (state) =>
   [
     'Confirmar dados:',
     `Servico: ${serviceLabel(state.serviceType)}`,
+    ...(state.serviceType === 'mudanca' ? [`Troca de ONU: ${state.moveSwapOnu ? 'Sim' : 'Nao'}`, `ONU antiga: ${short(state.oldFiber?.mac)}`] : []),
     `ONU: ${short(state.onu?.mac || state.onu?.Chassi)}`,
     `OLT: ${short(state.olt?.descricao || state.olt?.olt_nome || state.onu?.olt_nome || state.onu?.id_olt)}`,
     `Caixa/porta: ${short(state.box?.descricao)} / ${short(state.dropPort)}`,

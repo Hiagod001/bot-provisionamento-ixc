@@ -1277,6 +1277,7 @@ export class IxcClient {
     serial,
     address,
     signal: suppliedSignal,
+    serviceDescription,
   }) {
     if (!this.os.enabled) return null;
 
@@ -1287,14 +1288,14 @@ export class IxcClient {
     const signal = shouldReadSignal
       ? await this.getOnuPowerSummary(fiberId)
       : suppliedSignal || {};
-    const message = buildProvisionOsMessage({ box, port, serial, signal });
+    const message = [serviceDescription, buildProvisionOsMessage({ box, port, serial, signal })].filter(Boolean).join('\r\n');
     const result = await this.createAndCloseServiceOs({
       client,
       contract,
       login,
       address,
       message,
-      title: 'Provisionamento',
+      title: serviceDescription || 'Provisionamento',
     });
     return result ? { ...result, signal } : null;
   }

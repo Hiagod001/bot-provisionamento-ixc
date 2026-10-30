@@ -283,7 +283,7 @@ export const buildSerialRequestMessage = (state) =>
   [
     serviceLabel(state.serviceType),
     '',
-    state.serviceType === 'troca' && state.swapEquipment === 'onu'
+    (state.serviceType === 'troca' && state.swapEquipment === 'onu') || state.moveSwapOnu === true
       ? 'Digite no minimo 4 caracteres do campo SN do NOVO EQUIPAMENTO mostrado na foto.'
       : 'Para identificar a ONU, digite no minimo 4 caracteres do campo SN mostrado na foto.',
   ].join('\n');
@@ -667,6 +667,25 @@ const clearTitularityLoginMacsWithWarning = async (ctx, state, ixc) => {
 };
 
 const continueAfterValidatedPppoe = async (ctx, state, ixc) => {
+  if (state.serviceType === 'mudanca' && state.moveSwapOnu !== undefined && !state.oldFiber) {
+    const fibers = (await ixc.findFiberClientsByLogin(state.login.id)).filter(f => String(f.id_login) === String(state.login.id) && String(f.id_contrato) === String(state.contract.id));
+    if (fibers.length !== 1) {
+      state.step = 'move_blocked';
+      await ctx.reply('Nao foi possivel identificar uma unica ONU neste login e contrato. Confirme o cadastro com o NOC. Nada foi removido.');
+      return;
+    }
+    state.oldFiber = fibers[0];
+    if (state.moveSwapOnu) { await askSerial(ctx, state); return; }
+    state.serialSuffix = state.oldFiber.mac;
+    const pending = (await ixc.findPendingOnusBySerialSuffix(state.serialSuffix)).filter(o => String(o.mac || o.Chassi).toUpperCase() === String(state.oldFiber.mac).toUpperCase());
+    if (!pending.length) {
+      state.step = 'move_blocked';
+      await ctx.reply('A ONU atual ainda nao apareceu como pendente no destino. Conecte-a no novo endereco e reinicie a consulta. Se continuar sem aparecer, acione o NOC. Nada foi removido.');
+      return;
+    }
+    await continueWithPendingOnus(ctx, state, ixc, pending);
+    return;
+  }
   if (isRouterReplacement(state)) {
     await askRouterReplacementConfirmation(ctx, state);
     return;
@@ -921,6 +940,21 @@ const selectByCallback = async (ctx, prefix, expectedStep, field, nextStep, next
   return selected;
 };
 
+export const validateMoveDestination = async (state, ixc, payload) => {
+  if (state.moveOldRemoved) throw Error('A ONU antiga ja foi removida nesta tentativa. Acione o NOC para conferir antes de repetir.');
+  const old = await ixc.read('radpop_radio_cliente_fibra', state.oldFiber?.id);
+  if (!old || ['id_login', 'id_contrato', 'mac', 'id_transmissor', 'id_caixa_ftth', 'porta_ftth'].some(k => String(old[k] || '') !== String(state.oldFiber[k] || '')) || String(old.id_login) !== String(state.login.id) || String(old.id_contrato) !== String(state.contract.id)) throw Error('Cadastro antigo mudou. Nada foi removido. Reinicie a consulta.');
+  const login = await ixc.read('radusuarios', state.login.id);
+  if (String(login?.id_contrato) !== String(state.contract.id) || String(login?.id_cliente) !== String(state.client.id)) throw Error('Vinculo do login mudou. Nada foi removido.');
+  const box = await ixc.read('rad_caixa_ftth', state.box.id);
+  if (!box || box.status !== 'A' || (isSgaOnu(state) ? !isSgaDefaultBox(box) : !isAllowedProvisionBox(box, state.onu.id_olt))) throw Error('Caixa de destino indisponivel. Nada foi removido.');
+  if (!isSgaOnu(state) && !(await ixc.findFreeBoxPorts(box)).map(String).includes(String(state.dropPort))) throw Error('Porta de destino ocupada. Nada foi removido.');
+  const pending = await ixc.findPendingOnusBySerialSuffix(state.onu.mac || state.onu.Chassi);
+  if (!pending.some(o => String(o.id) === String(state.onu.id) && String(o.id_olt) === String(state.onu.id_olt) && String(o.mac || o.Chassi).toUpperCase() === String(state.onu.mac || state.onu.Chassi).toUpperCase() && String(o.slotno) === String(state.onu.slotno) && String(o.ponno) === String(state.onu.ponno))) throw Error('ONU de destino mudou ou nao esta mais pendente. Nada foi removido.');
+  await ixc.prepareProvisionPayload(payload);
+  await ixc.ensureOnuAuthorizationApiAvailable();
+};
+
 export const buildProvisionPayload = (state) => {
   if (String(state.onu?.id_olt || state.olt?.id) === '9' &&
       (!state.profile || !selectProfilesForOlt([state.profile], { id: '9' }, state.onu).length)) {
@@ -1007,7 +1041,6 @@ const continueAfterBoxSelection = async (ctx, state, ixc) => {
   if (state.serviceType === 'troca' && state.swapWithoutOldFiber && state.contract?.id) {
     await askLoginForContract(ctx, state, ixc);
   } else if (state.serviceType === 'mudanca' && state.login?.id) {
-    await clearLoginMacWithWarning(ctx, state, ixc);
     await askProfile(ctx, state, ixc);
   } else if (state.serviceType === 'troca' && state.login?.id) {
     await askProfile(ctx, state, ixc);
@@ -1349,12 +1382,26 @@ export const registerFlow = (bot, ixc, config) => {
     const state = resetSession(ctx);
     state.serviceType = ctx.callbackQuery.data.replace('service:', '');
     await ctx.answerCbQuery('Servico selecionado');
+    if (state.serviceType === 'mudanca') {
+      state.step = 'move_equipment_choice';
+      await ctx.reply('O cliente vai mudar tambem o equipamento (ONU)?', { reply_markup: { inline_keyboard: [[{ text: 'Sim', callback_data: 'moveequipment:yes' }, { text: 'Nao', callback_data: 'moveequipment:no' }]] } });
+      return;
+    }
     if (state.serviceType === 'troca') {
       state.step = 'swap_equipment_choice';
       await ctx.reply('Qual equipamento sera trocado?', swapEquipmentKeyboard());
       return;
     }
     await askSerial(ctx, state);
+  });
+
+  bot.action(/^moveequipment:(yes|no)$/, async ctx => {
+    const state = getSession(ctx);
+    if (state.step !== 'move_equipment_choice') { await answerBusyOrExpired(ctx, state); return; }
+    state.moveSwapOnu = ctx.callbackQuery.data === 'moveequipment:yes';
+    state.step = 'client';
+    await ctx.answerCbQuery('Selecionado');
+    await ctx.reply('Envie o ID do cliente.');
   });
 
   bot.action(/^swapequipment:/, async (ctx) => {
@@ -1682,6 +1729,12 @@ export const registerFlow = (bot, ixc, config) => {
 
     await ctx.reply('Provisionamento em andamento. Aguarde a confirmacao; nao clique novamente.');
     try {
+      if (state.serviceType === 'mudanca' && state.moveSwapOnu !== undefined) {
+        await validateMoveDestination(state, ixc, payload);
+        await ixc.removeAuthorizedOnu(state.oldFiber.id);
+        state.moveOldRemoved = true;
+        await clearLoginMacWithWarning(ctx, state, ixc);
+      }
       await activateContractWithWarning(ctx, state, ixc);
       const result = await ixc.provisionOnu(payload);
       await ctx.reply(
@@ -1700,6 +1753,7 @@ export const registerFlow = (bot, ixc, config) => {
             port: state.dropPort,
             serial: result.provisionedOnu?.mac || state.onu?.mac || state.onu?.Chassi,
             address: contractAddress(state.contract, state.client),
+            serviceDescription: state.serviceType === 'mudanca' ? (state.moveSwapOnu ? 'Mudanca de endereco com troca de ONU' : 'Mudanca de endereco') : undefined,
           });
           if (osResult) console.log(`OS ${osResult.serviceOrder.id} finalizada para a fibra ${result.provisionedOnu?.id}.`);
         } catch (osError) {
@@ -1933,7 +1987,7 @@ export const registerFlow = (bot, ixc, config) => {
         return;
       }
 
-      if (state.serviceType === 'mudanca') {
+      if (state.serviceType === 'mudanca' && state.moveSwapOnu === undefined) {
         const authorizedOnus = await withBoxNames(
           ixc,
           await ixc.findAuthorizedOnusBySerialSuffix(serial)
@@ -1954,6 +2008,14 @@ export const registerFlow = (bot, ixc, config) => {
       }
 
       const onus = await ixc.findPendingOnusBySerialSuffix(serial);
+      if (state.serviceType === 'mudanca' && state.moveSwapOnu === false && onus.some(o => String(o.mac || o.Chassi).toUpperCase() !== String(state.oldFiber?.mac).toUpperCase())) {
+        await ctx.reply('Esta mudanca deve usar a ONU atual do cliente. Reinicie e escolha Sim se houver troca de equipamento.');
+        return;
+      }
+      if (state.serviceType === 'mudanca' && state.moveSwapOnu && onus.some(o => String(o.mac || o.Chassi).toUpperCase() === String(state.oldFiber?.mac).toUpperCase())) {
+        await ctx.reply('Informe o serial da NOVA ONU, diferente do equipamento antigo.');
+        return;
+      }
 
       if (!onus.length) {
         await ctx.reply('Nao achei ONU pendente com esse serial.');

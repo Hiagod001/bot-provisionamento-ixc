@@ -4,6 +4,28 @@ import { contractAddress, contractButtonLabel } from '../src/format.js';
 import { sendContractOptions, askSwapOldFiberRemoval, hasSwapBoxAndPort, buildProvisionPayload } from '../src/flow.js';
 import { reprovisionExisting } from '../src/reprovision.js';
 import { createWebFlow } from '../src/webFlow.js';
+import { validateMoveDestination, buildSerialRequestMessage } from '../src/flow.js';
+
+test('mudanca pergunta sobre ONU e segue para cliente em ambas as escolhas', async () => {
+  for (const choice of ['yes', 'no']) {
+    const flow = createWebFlow({}, { dryRun: true });
+    const session = flow.create();
+    try {
+      await flow.dispatch(session, { callback: 'service:mudanca' });
+      assert.match(session.messages.at(-1).text, /vai mudar tambem o equipamento/);
+      assert.equal(session.messages.at(-1).keyboard.inline_keyboard[0].length, 2);
+      await flow.dispatch(session, { callback: `moveequipment:${choice}` });
+      assert.match(session.messages.at(-1).text, /ID do cliente/);
+    } finally { flow.dispose(session); }
+  }
+  assert.match(buildSerialRequestMessage({ serviceType: 'mudanca', moveSwapOnu: true }), /NOVO EQUIPAMENTO/);
+});
+
+test('mudanca bloqueia antes da remocao se vinculo mudou ou tentativa ja removeu ONU', async () => {
+  await assert.rejects(validateMoveDestination({ moveOldRemoved: true }, {}, {}), /ja foi removida/);
+  const old = { id: '1', id_login: '2', id_contrato: '3', mac: 'OLD' };
+  await assert.rejects(validateMoveDestination({ oldFiber: old, login: { id: '2' }, contract: { id: '3' } }, { read: async () => ({ ...old, mac: 'CHANGED' }) }, {}), /Cadastro antigo mudou/);
+});
 
 const reproFixture = () => {
   const client = { id: '10' }, contract = { id: '20', id_cliente: '10', status: 'A', endereco: 'Rua Teste', numero: '77' }, login = { id: '30', id_cliente: '10', id_contrato: '20', login: 'teste' };
