@@ -25,7 +25,7 @@ const parsePhpSerializedMap = (value) => {
   return fields;
 };
 
-const normalizePendingOnu = (row) => {
+export const normalizePendingOnu = (row) => {
   if (!Array.isArray(row?.cell)) return row;
 
   let fields = {};
@@ -35,14 +35,16 @@ const normalizePendingOnu = (row) => {
     fields = {};
   }
 
-  const [oltName, chassi, slot, pon, model, mac] = row.cell;
+  // Current IXC grid includes an extra column after the OLT name.
+  const cells = row.cell.length === 7 ? [row.cell[0], ...row.cell.slice(2)] : row.cell;
+  const [oltName, chassi, slot, pon, model, mac] = cells;
   return {
     id: row.id,
     fila_id: fields.ID ?? '',
     id_olt: fields.ID ?? '',
     olt_nome: oltName ?? '',
     Chassi: fields.CHASSI ?? chassi ?? '',
-    slotno: fields.SLO ?? slot ?? '',
+    slotno: fields.SLOT ?? fields.SLO ?? slot ?? '',
     ponno: fields.PON ?? pon ?? '',
     ponid: fields.PONID ?? '',
     mac: fields.MAC ?? mac ?? '',

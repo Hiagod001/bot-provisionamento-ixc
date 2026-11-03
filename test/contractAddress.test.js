@@ -4,6 +4,18 @@ import { contractAddress, contractButtonLabel } from '../src/format.js';
 import { sendContractOptions, askSwapOldFiberRemoval, hasSwapBoxAndPort, buildProvisionPayload } from '../src/flow.js';
 import { reprovisionExisting } from '../src/reprovision.js';
 import { createWebFlow } from '../src/webFlow.js';
+import { normalizePendingOnu } from '../src/ixcClient.js';
+
+test('fila IXC usa SLOT e preserva PON zero sem confundir com chassi', () => {
+  const id = Buffer.from('a:5:{s:2:"ID";s:1:"3";s:4:"SLOT";s:1:"1";s:3:"PON";s:1:"0";s:5:"PONID";s:5:"0/1/0";s:3:"MAC";s:16:"485754439E8AD4B4";}').toString('base64');
+  const onu = normalizePendingOnu({ id, cell: ['OLT3', '2', '0', '1', '0', 'HG', '485754439E8AD4B4'] });
+  assert.equal(onu.slotno, '1'); assert.equal(onu.ponno, '0'); assert.equal(onu.ponid, '0/1/0');
+  assert.equal(onu.modelo, 'HG');
+  const fh = normalizePendingOnu({ id: '', cell: ['FiberHome', '2', '1', '7', '12', 'HG260', 'FHTT1234'] });
+  assert.equal(fh.slotno, '7'); assert.equal(fh.ponno, '12'); assert.equal(fh.mac, 'FHTT1234');
+  const legacy = normalizePendingOnu({ id: '', cell: ['FiberHome', '1', '15', '4', 'HG260', 'FHTT1234'] });
+  assert.equal(legacy.slotno, '15'); assert.equal(legacy.ponno, '4');
+});
 import { validateMoveDestination, buildSerialRequestMessage } from '../src/flow.js';
 
 test('mudanca pergunta sobre ONU e segue para cliente em ambas as escolhas', async () => {
