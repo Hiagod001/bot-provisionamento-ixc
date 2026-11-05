@@ -2,6 +2,7 @@ import { randomUUID, createHmac } from 'node:crypto';
 import { isAllowedProvisionBox, selectProfilesForOlt } from './ixcClient.js';
 import { fileURLToPath } from 'node:url';
 import { reprovisionExisting } from './reprovision.js';
+import { resolveProvisionProfiles } from './provisionProfiles.js';
 
 import {
   confirmKeyboard,
@@ -69,6 +70,7 @@ const newSession = () => ({
   menuToken: null,
   onu: null,
   oldFiber: null,
+  previousFiber: null,
   swapWithoutOldFiber: false,
   targetFibers: [],
   pendingAfterOldFiberRemoval: [],
@@ -695,7 +697,8 @@ const continueAfterValidatedPppoe = async (ctx, state, ixc) => {
     return;
   }
   if (state.serviceType === 'troca' && state.oldFiber?.id) {
-    await askSwapOldFiberRemoval(ctx, state);
+    state.profileBeforeSwap = true;
+    await askProfile(ctx, state, ixc);
     return;
   }
   await clearLoginMacWithWarning(ctx, state, ixc);
@@ -1181,10 +1184,29 @@ export const registerFlow = (bot, ixc, config) => {
   };
   bot.command('reprovisionar', startReprovision);
   bot.action(/^repro:start$/, async ctx => { await ctx.answerCbQuery(); await startReprovision(ctx); });
-  const confirmReprovision = async (ctx, state) => {
+  const confirmReprovision = async (ctx, state, mode) => {
+    try {
+      const resolved = await resolveProvisionProfiles(ixc, { oltId: state.reproFiber.id_transmissor, oldFiber: state.reproFiber, mode });
+      if (!resolved.profile) {
+        const token = setMenuChoices(state, resolved.choices, 'repro_profile_choose');
+        await ctx.reply('O cadastro antigo esta sem script. A ONU e integrada ou bridge?', rowsKeyboard('reproprofile', resolved.choices, profileModeLabel, token));
+        return;
+      }
+      state.reproProfile = resolved.profile;
+      state.reproMode = resolved.mode;
+    } catch (error) {
+      state.step = 'repro_failed';
+      await ctx.reply(`${error.message} Nada foi desprovisionado.`, provisionKeyboard());
+      return;
+    }
     const token = setMenuChoices(state, [state.reproFiber], 'repro_confirm');
-    await ctx.reply(`${formatContract(state.contract, state.client)}\nLogin: ${state.login.login}\nSerial: ${state.reproFiber.mac}\n\nConfirma desprovisionar e provisionar novamente este equipamento? A conexao sera interrompida durante o processo. Para cancelar, envie /cancelar.`, rowsKeyboard('reproconfirm', [state.reproFiber], () => 'Confirmar reprovisionamento', token));
+    await ctx.reply(`${formatContract(state.contract, state.client)}\nLogin: ${state.login.login}\nSerial: ${state.reproFiber.mac}\nTipo: ${profileModeLabel(state.reproProfile)}\nScript: ${state.reproProfile.nome}\n\nConfirma desprovisionar e provisionar novamente este equipamento? A conexao sera interrompida durante o processo. Para cancelar, envie /cancelar.`, rowsKeyboard('reproconfirm', [state.reproFiber], () => 'Confirmar reprovisionamento', token));
   };
+  bot.action(/^reproprofile:/, async ctx => {
+    const state = getSession(ctx);
+    const profile = await selectByCallback(ctx, 'reproprofile', 'repro_profile_choose', 'reproProfile', 'repro_loading', p => `Tipo: ${profileModeLabel(p)}`);
+    if (profile) await confirmReprovision(ctx, state, profileMode(profile));
+  });
   bot.action(/^reprocontract:/, async ctx => {
     const state = getSession(ctx);
     const contract = await selectByCallback(ctx, 'reprocontract', 'repro_contract_choose', 'contract', 'repro_loading', c => `${formatContract(c, state.client)}\nBuscando fibra do login. Aguarde...`);
@@ -1218,7 +1240,7 @@ export const registerFlow = (bot, ixc, config) => {
     await ctx.answerCbQuery('Aguarde');
     await ctx.reply('Reprovisionamento em andamento. Aguarde a confirmacao; nao clique novamente.');
     try {
-      const result = await reprovisionExisting(ixc, { client: state.client, contract: state.contract, login: state.login, fiber: state.reproFiber, dryRun: config.dryRun });
+      const result = await reprovisionExisting(ixc, { client: state.client, contract: state.contract, login: state.login, fiber: state.reproFiber, profile: state.reproProfile, mode: state.reproMode, dryRun: config.dryRun });
       state.step = 'repro_done';
       if (result.simulated) { await ctx.reply('Simulacao concluida. Nenhum equipamento foi alterado.', provisionKeyboard()); return; }
       state.provisionedOnu = result.fiber;
@@ -1521,6 +1543,7 @@ export const registerFlow = (bot, ixc, config) => {
 
     const pending = await ixc.findPendingOnusBySerialSuffix(state.serialSuffix);
 
+    state.previousFiber = state.oldFiber;
     state.oldFiber = null;
     state.pendingAfterOldFiberRemoval = [];
     await continueWithPendingOnus(ctx, state, ixc, pending);
@@ -1539,7 +1562,7 @@ export const registerFlow = (bot, ixc, config) => {
     }
 
     const oldFiber = await ixc.read('radpop_radio_cliente_fibra', state.oldFiber.id);
-    if (!oldFiber || ['id_caixa_ftth', 'porta_ftth', 'id_login', 'id_transmissor', 'mac'].some(key => String(oldFiber[key] || '') !== String(state.oldFiber[key] || ''))) {
+    if (!oldFiber || ['id_caixa_ftth', 'porta_ftth', 'id_login', 'id_transmissor', 'id_perfil', 'mac'].some(key => String(oldFiber[key] || '') !== String(state.oldFiber[key] || ''))) {
       state.step = 'swap_lookup_blocked';
       await ctx.reply('O cadastro antigo mudou durante a troca. Nada foi removido. Reinicie a troca para conferir os dados atuais.');
       return;
@@ -1561,8 +1584,19 @@ export const registerFlow = (bot, ixc, config) => {
       return;
     }
     console.log(JSON.stringify({ event: 'swap_preserve_box', at: new Date().toISOString(), contractId: state.contract.id, fiberId: oldFiber.id, boxId: box.id, port: sgaBox ? '0' : oldFiber.porta_ftth }));
+    // Revalidar o perfil antes de remover: pode ter sido editado por outro operador.
+    try {
+      const resolved = await resolveProvisionProfiles(ixc, { oltId: state.onu?.id_olt || state.olt?.id, oldFiber, mode: profileMode(state.profile) });
+      if (!resolved.profile) throw Error('Escolha o tipo de equipamento antes de remover a ONU antiga.');
+      state.profile = resolved.profile;
+    } catch (error) {
+      state.step = 'profile_blocked';
+      await ctx.reply(`${error.message} Nada foi removido. Envie /cancelar para reiniciar.`);
+      return;
+    }
     await ctx.answerCbQuery('Removendo equipamento antigo');
     await ctx.reply('Removendo o equipamento antigo. Aguarde a confirmacao antes de tentar novamente.');
+    state.previousFiber = oldFiber;
     await ixc.removeAuthorizedOnu(oldFiber.id);
 
     if (sgaBox) {
@@ -1683,11 +1717,7 @@ export const registerFlow = (bot, ixc, config) => {
     );
     if (!profile) return;
     const state = getSession(ctx);
-    if (state.serviceType === 'titularidade') {
-      await askTitularityTransfer(ctx, state, ixc);
-      return;
-    }
-    await ctx.reply(buildSummary(state), confirmKeyboard());
+    await finishProfileChoice(ctx, state, ixc);
   });
 
   bot.action(/^confirm:/, async (ctx) => {
@@ -1729,6 +1759,15 @@ export const registerFlow = (bot, ixc, config) => {
 
     await ctx.reply('Provisionamento em andamento. Aguarde a confirmacao; nao clique novamente.');
     try {
+      const latest = await resolveProvisionProfiles(ixc, {
+        oltId: state.onu?.id_olt || state.olt?.id,
+        oldFiber: state.oldFiber || state.previousFiber,
+        mode: profileMode(state.profile),
+      });
+      if (!latest.profile || String(latest.profile.id) !== String(state.profile.id) ||
+          String(latest.profile.comando || latest.profile.comandos) !== String(state.profile.comando || state.profile.comandos)) {
+        throw Error('Script alterado durante a confirmacao. Reinicie a consulta para conferir o perfil atual.');
+      }
       if (state.serviceType === 'mudanca' && state.moveSwapOnu !== undefined) {
         await validateMoveDestination(state, ixc, payload);
         await ixc.removeAuthorizedOnu(state.oldFiber.id);
@@ -2125,11 +2164,7 @@ export const registerFlow = (bot, ixc, config) => {
       clearMenuChoices(state);
       state.step = 'confirm';
       await ctx.reply(`Tipo escolhido: ${profileModeLabel(profile)}`);
-      if (state.serviceType === 'titularidade') {
-        await askTitularityTransfer(ctx, state, ixc);
-        return;
-      }
-      await ctx.reply(buildSummary(state), confirmKeyboard());
+      await finishProfileChoice(ctx, state, ixc);
       return;
     }
 
@@ -2137,24 +2172,47 @@ export const registerFlow = (bot, ixc, config) => {
   });
 };
 
-const askProfile = async (ctx, state, ixc) => {
-  await loadOlt(state, ixc);
-
-  const profiles = await ixc.findProfilesByOlt(state.olt, state.onu || state.oldFiber);
-  if (!profiles.length) {
-    state.step = 'profile_manual';
-    await ctx.reply(
-      `Nao achei script para esta OLT. Confira os perfis no IXC ou envie /cancelar.`
-    );
+const finishProfileChoice = async (ctx, state, ixc) => {
+  if (state.profileBeforeSwap) {
+    state.profileBeforeSwap = false;
+    await askSwapOldFiberRemoval(ctx, state);
     return;
   }
+  if (state.serviceType === 'titularidade') {
+    await askTitularityTransfer(ctx, state, ixc);
+    return;
+  }
+  state.step = 'confirm';
+  await ctx.reply(buildSummary(state), confirmKeyboard());
+};
 
-  const defaultProfileId = state.olt?.perfil_fibra_padrao;
-  const choices = selectTechnicianProfiles(profiles, defaultProfileId);
-
-  const menuToken = setMenuChoices(state, choices, 'profile_choose');
-  await ctx.reply(
-    'Preciso saber o tipo da ONU:\n\nEla e integrada ou bridge?',
-    rowsKeyboard('profile', choices, (profile) => profileModeLabel(profile), menuToken)
-  );
+export const askProfile = async (ctx, state, ixc) => {
+  await loadOlt(state, ixc);
+  try {
+    let oldFiber = state.oldFiber || state.previousFiber;
+    if (!oldFiber && state.login?.id) {
+      const fibers = (await ixc.findFiberClientsByLogin(state.login.id)).filter(f => String(f.id_login) === String(state.login.id) && String(f.id_contrato) === String(state.contract.id));
+      if (fibers.length > 1) throw Error('Mais de um cadastro de fibra neste login. Confirme com o NOC.');
+      oldFiber = fibers[0];
+    }
+    if (oldFiber) state.previousFiber = oldFiber;
+    const resolved = await resolveProvisionProfiles(ixc, {
+      oltId: state.onu?.id_olt || state.olt?.id || oldFiber?.id_transmissor,
+      oldFiber, mode: state.previousFiber ? profileMode(state.profile) : undefined,
+    });
+    if (resolved.profile) {
+      state.profile = resolved.profile;
+      clearMenuChoices(state);
+      const origin = Number(oldFiber?.id_perfil) > 0 ? 'Tipo identificado pelo script anterior' : 'Tipo escolhido';
+      await ctx.reply(`${origin}: ${profileModeLabel(resolved.profile)}. Script da OLT: ${resolved.profile.nome}.`);
+      await finishProfileChoice(ctx, state, ixc);
+      return;
+    }
+    const menuToken = setMenuChoices(state, resolved.choices, 'profile_choose');
+    await ctx.reply('Sem script anterior no cadastro. A ONU e integrada ou bridge?',
+      rowsKeyboard('profile', resolved.choices, profileModeLabel, menuToken));
+  } catch (error) {
+    state.step = 'profile_blocked';
+    await ctx.reply(`${error.message} Envie /cancelar para reiniciar.`);
+  }
 };

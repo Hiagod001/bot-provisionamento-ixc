@@ -41,10 +41,11 @@ test('mudanca bloqueia antes da remocao se vinculo mudou ou tentativa ja removeu
 
 const reproFixture = () => {
   const client = { id: '10' }, contract = { id: '20', id_cliente: '10', status: 'A', endereco: 'Rua Teste', numero: '77' }, login = { id: '30', id_cliente: '10', id_contrato: '20', login: 'teste' };
-  const fiber = { id: '40', id_contrato: '20', id_login: '30', mac: 'HWTC1234', id_transmissor: '5', id_perfil: '7', id_caixa_ftth: '123', porta_ftth: '2' };
+  const profile = { id: '94', nome: 'ONU-INTEGRADA-OLT HUAWEI', comando: 'integrated commands' };
+  const fiber = { id: '40', id_contrato: '20', id_login: '30', mac: 'HWTC1234', id_transmissor: '5', id_perfil: '94', comandos: profile.comando, id_caixa_ftth: '123', porta_ftth: '2' };
   const calls = [];
   const ixc = {
-    read: async table => ({ cliente_contrato: contract, radusuarios: login, radpop_radio_cliente_fibra: { ...fiber } })[table],
+    read: async table => ({ cliente_contrato: contract, radusuarios: login, radpop_radio_cliente_fibra: { ...fiber }, radpop_radio_cliente_fibra_perfil: { ...profile } })[table],
     ensureOnuAuthorizationApiAvailable: async () => {},
     actionPost: async (action, data) => { calls.push([action, data.id]); return { type: 'success' }; },
     authorizeOnu: async id => { calls.push(['authorize', id]); return { type: 'success' }; },
