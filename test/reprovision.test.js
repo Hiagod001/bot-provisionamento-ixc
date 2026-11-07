@@ -40,7 +40,7 @@ test('aceita confirmacao HTML real e JSON; rejeita retorno vazio, erro ou parcia
 
 test('reprovisiona apos HTML, atualiza script e preserva cadastro e localizacao', async () => {
   const f = fixture(), original = { ...f.fiber };
-  const result = await reprovisionExisting(f.ixc, f);
+  const result = await reprovisionExisting(f.ixc, f, { wait: async () => {} });
   assert.deepEqual(f.calls, ['remove', 'update', 'authorize']);
   assert.deepEqual(result.fiber, { ...original, id_perfil: '86', comandos: 'commands-86' });
 });
@@ -99,10 +99,48 @@ test('troca e mudanca aproveitam tipo antigo sem perguntar novamente', async () 
 test('nao regrava apos alteracao concorrente nem repete escrita inconclusiva', async () => {
   const f = fixture();
   f.ixc.actionPost = async () => { f.fiber.porta_ftth = '3'; return successHtml; };
-  await assert.rejects(reprovisionExisting(f.ixc, { ...f, fiber: { ...f.fiber } }), /Cadastro mudou/);
+  await assert.rejects(reprovisionExisting(f.ixc, { ...f, fiber: { ...f.fiber } }, { wait: async () => {} }), /Cadastro mudou/);
   assert.deepEqual(f.calls, []);
   const g = fixture();
   g.ixc.authorizeOnu = async () => { g.calls.push('authorize'); return successHtml + '<div>Command failed</div>'; };
-  await assert.rejects(reprovisionExisting(g.ixc, g), /nao confirmou a regravacao/);
+  await assert.rejects(reprovisionExisting(g.ixc, g, { wait: async () => {} }), /nao confirmou a regravacao/);
   assert.deepEqual(g.calls, ['remove', 'update', 'authorize']);
+});
+
+test('espera 30 segundos apos remover, avisa e bloqueia repeticao durante a espera', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture();
+  const pending = reprovisionExisting(f.ixc, { ...f, onWaiting: async () => { f.calls.push('notice'); } });
+  await new Promise(setImmediate);
+  assert.deepEqual(f.calls, ['remove', 'notice']);
+  await assert.rejects(reprovisionExisting(f.ixc, f), /em processamento/);
+  t.mock.timers.tick(29999);
+  await new Promise(setImmediate);
+  assert.deepEqual(f.calls, ['remove', 'notice']);
+  t.mock.timers.tick(1);
+  await pending;
+  assert.deepEqual(f.calls, ['remove', 'notice', 'update', 'authorize']);
+});
+
+test('sem confirmacao ou em simulacao nao espera nem regrava', async () => {
+  const f = fixture();
+  const options = { wait: async () => { throw Error('Nao deveria esperar'); } };
+  await reprovisionExisting(f.ixc, { ...f, dryRun: true }, options);
+  assert.deepEqual(f.calls, []);
+  f.ixc.actionPost = async () => ({});
+  await assert.rejects(reprovisionExisting(f.ixc, f, options), /nao confirmou a desprovisao/);
+  assert.deepEqual(f.calls, []);
+});
+
+test('falha na mensagem nao impede espera e recuperacao; cadastro alterado durante espera bloqueia gravacao', async () => {
+  const f = fixture();
+  await reprovisionExisting(f.ixc, { ...f, onWaiting: async () => { throw Error('Canal indisponivel'); } }, {
+    wait: async ms => { assert.equal(ms, 30000); f.calls.push('wait'); },
+  });
+  assert.deepEqual(f.calls, ['remove', 'wait', 'update', 'authorize']);
+  const g = fixture();
+  await assert.rejects(reprovisionExisting(g.ixc, g, {
+    wait: async () => { g.fiber.id_login = '999'; },
+  }), /Cadastro mudou/);
+  assert.deepEqual(g.calls, ['remove']);
 });

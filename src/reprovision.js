@@ -1,5 +1,7 @@
 import { resolveProvisionProfiles } from './provisionProfiles.js';
 const busy = new Set();
+export const REPROVISION_SETTLE_MS = 30000;
+const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 const fields = ['id', 'id_login', 'id_contrato', 'mac', 'id_transmissor', 'id_perfil', 'id_caixa_ftth', 'porta_ftth', 'slotno', 'ponno', 'onu_numero', 'comandos', 'vlan', 'vlan_pppoe'];
 const same = (a, b) => a && b && fields.every(k => String(a[k] ?? '') === String(b[k] ?? ''));
 
@@ -16,7 +18,7 @@ export const isConfirmedOltAction = response => {
     (/panel-(?:heading-)?success/i.test(raw) && /command execute success|executad[oa] com sucesso|successfully/i.test(text));
 };
 
-export async function reprovisionExisting(ixc, { client, contract, login, fiber, mode, profile, dryRun = false }) {
+export async function reprovisionExisting(ixc, { client, contract, login, fiber, mode, profile, dryRun = false, onWaiting = async () => {} }, { wait = delay } = {}) {
   const key = String(fiber.id);
   if (busy.has(key)) throw Error('Este equipamento ja esta em processamento. Aguarde.');
   busy.add(key);
@@ -45,6 +47,12 @@ export async function reprovisionExisting(ixc, { client, contract, login, fiber,
     phase = 'deauthorize';
     const removed = await ixc.actionPost('botao_excluir_dispositivo_22434', { id: key });
     if (!isConfirmedOltAction(removed)) throw Error('IXC nao confirmou a desprovisao. Acione o NOC antes de repetir.');
+    phase = 'wait_after_deauthorize';
+    // Falha ao avisar o operador nao deve impedir a recuperacao da ONU.
+    try { await onWaiting(); } catch {
+      console.warn(JSON.stringify({ event: 'reprovision_wait_notice_failed', fiberId: key }));
+    }
+    await wait(REPROVISION_SETTLE_MS);
     phase = 'update_profile';
     const retained = await ixc.read('radpop_radio_cliente_fibra', key);
     if (!same(retained, current)) throw Error('Cadastro mudou apos desprovisao. Acione o NOC para recuperar o equipamento.');

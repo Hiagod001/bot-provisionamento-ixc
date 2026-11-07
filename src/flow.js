@@ -1240,7 +1240,11 @@ export const registerFlow = (bot, ixc, config) => {
     await ctx.answerCbQuery('Aguarde');
     await ctx.reply('Reprovisionamento em andamento. Aguarde a confirmacao; nao clique novamente.');
     try {
-      const result = await reprovisionExisting(ixc, { client: state.client, contract: state.contract, login: state.login, fiber: state.reproFiber, profile: state.reproProfile, mode: state.reproMode, dryRun: config.dryRun });
+      const result = await reprovisionExisting(ixc, {
+        client: state.client, contract: state.contract, login: state.login,
+        fiber: state.reproFiber, profile: state.reproProfile, mode: state.reproMode, dryRun: config.dryRun,
+        onWaiting: () => ctx.reply('ONU desprovisionada. Aguardando 30 segundos para a OLT concluir a remocao. Depois vou provisionar novamente automaticamente. Aguarde; nao clique novamente.'),
+      });
       state.step = 'repro_done';
       if (result.simulated) { await ctx.reply('Simulacao concluida. Nenhum equipamento foi alterado.', provisionKeyboard()); return; }
       state.provisionedOnu = result.fiber;

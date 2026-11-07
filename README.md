@@ -76,7 +76,7 @@ npm.cmd run dev
 
 O tipo bridge/integrada vem do perfil antigo. O bot seleciona o perfil existente aprovado para a OLT de destino em `src/provisionProfiles.js`; nao escolhe por data de criacao nem pelo fabricante da ONU. Apenas cadastros sem perfil anterior perguntam o tipo ao operador. Perfil antigo ilegivel, tipo ambiguo ou OLT sem mapeamento bloqueiam a operacao para conferencia do NOC.
 
-Reprovisionar preserva o cadastro, serial, caixa, porta e vinculos. Antes de desautorizar, revalida os dados e o perfil; depois atualiza o script quando necessario e autoriza novamente. As respostas HTML de console e JSON precisam confirmar a operacao sem indicios de erro. Falhas registram a etapa, sem imprimir o console da OLT ou credenciais. Retorno inconclusivo nao provoca repeticao automatica. A medicao de sinal continua opcional pelo botao.
+Reprovisionar preserva o cadastro, serial, caixa, porta e vinculos. Antes de desautorizar, revalida os dados e o perfil; depois aguarda 30 segundos com aviso ao operador, confere novamente o cadastro, atualiza o script quando necessario e autoriza novamente. A operacao continua bloqueada contra cliques repetidos durante a espera. As respostas HTML de console e JSON precisam confirmar a operacao sem indicios de erro. Falhas registram a etapa, sem imprimir o console da OLT ou credenciais. Retorno inconclusivo nao provoca repeticao automatica. A medicao de sinal continua opcional pelo botao.
 
 Base oficial: `https://SEU_DOMINIO/webservice/v1/{tabela}`.
 

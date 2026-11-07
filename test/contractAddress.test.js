@@ -58,7 +58,7 @@ test('reprovisiona o mesmo cadastro, preserva caixa e porta e respeita simulacao
   const f = reproFixture();
   await reprovisionExisting(f.ixc, { ...f, dryRun: true });
   assert.equal(f.calls.length, 0);
-  const result = await reprovisionExisting(f.ixc, f);
+  const result = await reprovisionExisting(f.ixc, f, { wait: async () => {} });
   assert.deepEqual(f.calls, [['botao_excluir_dispositivo_22434', '40'], ['authorize', '40']]);
   assert.equal(result.fiber.id_caixa_ftth, '123');
 });
