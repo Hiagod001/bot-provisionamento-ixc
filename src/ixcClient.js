@@ -1079,7 +1079,11 @@ export class IxcClient {
     const response = await this.actionPost('botao_gravar_dispositivo_22408', {
       id: String(fiberId),
     });
-    assertNotIxcError(response, 'gravar ONU no dispositivo pela API');
+    try { assertNotIxcError(response, 'gravar ONU no dispositivo pela API'); } catch (error) {
+      // Disponivel apenas para captura restrita; nao imprimir a resposta bruta.
+      error.ixcResponse = response;
+      throw error;
+    }
     return response;
   }
 

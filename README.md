@@ -80,6 +80,8 @@ Reprovisionar preserva o cadastro, serial, caixa, porta e vinculos. Antes de des
 
 Base oficial: `https://SEU_DOMINIO/webservice/v1/{tabela}`.
 
+Retornos nao confirmados nas etapas de desautorizar/autorizar geram uma referencia para o NOC e preservam o corpo recebido em `data/olt-responses/<referencia>.json`, no diretorio de trabalho do servico. Esses arquivos ficam fora do Git e da pasta publica, com diretorio 0700 e arquivo 0600 no servidor Linux. Podem conter credenciais nos comandos; apenas o administrador deve consulta-los. Logs e mensagens exibem somente etapa, classificacao e referencia. Timeout sem corpo tambem e registrado, sem inventar uma resposta nem repetir a operacao. A captura cobre tentativas futuras, nao recupera retornos antigos que nao foram gravados.
+
 | Etapa | Tabela IXC | Uso |
 | --- | --- | --- |
 | ONU aguardando autorizacao | `fh_onu_nao_autorizadas` | Buscar pelo final do serial/MAC e remover da fila apos provisionar |

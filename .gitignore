@@ -6,3 +6,4 @@ npm-debug.log*
 .DS_Store
 data/message-history.json
 data/message-history.json.*.tmp
+data/olt-responses/

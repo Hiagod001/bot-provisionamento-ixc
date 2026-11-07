@@ -1,4 +1,5 @@
 import { resolveProvisionProfiles } from './provisionProfiles.js';
+import { saveOltResponse } from './oltResponseAudit.js';
 const busy = new Set();
 export const REPROVISION_SETTLE_MS = 30000;
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -7,18 +8,46 @@ const same = (a, b) => a && b && fields.every(k => String(a[k] ?? '') === String
 
 // O IXC retorna HTML de console para as acoes de OLT, nao apenas JSON.
 // Um painel verde sem confirmacao de comando nao comprova a operacao.
-export const isConfirmedOltAction = response => {
+export const classifyOltAction = response => {
   const raw = typeof response === 'string' ? response : String(response?.message || '');
   const text = raw.replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
     .replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ');
   if (response?.type === 'error' || /panel-(?:heading-)?(?:danger|warning|error)/i.test(raw) ||
-      /\b(error|erro|falha|failed|failure|invalid|timeout|incomplete|unknown command|not found)\b/i.test(text)) return false;
-  return response?.type === 'success' ||
-    (/panel-(?:heading-)?success/i.test(raw) && /command execute success|executad[oa] com sucesso|successfully/i.test(text));
+      /\b(error|erro|falha|failed|failure|invalid|timeout|incomplete|unknown command|not found)\b/i.test(text)) return 'ixc_rejected';
+  if (response?.type === 'success' ||
+    (/panel-(?:heading-)?success/i.test(raw) && /command execute success|executad[oa] com sucesso|successfully/i.test(text))) return 'confirmed';
+  return response === undefined || response === null || response === '' ? 'empty_response' : 'unrecognized_response';
 };
+export const isConfirmedOltAction = response => classifyOltAction(response) === 'confirmed';
 
-export async function reprovisionExisting(ixc, { client, contract, login, fiber, mode, profile, dryRun = false, onWaiting = async () => {} }, { wait = delay } = {}) {
+export async function runReprovisionOltAction(request, { fiberId, phase }, saveResponse = saveOltResponse) {
+  let response, transportError;
+  try { response = await request(); } catch (error) {
+    transportError = error;
+    response = error.ixcResponse ?? error.response?.data;
+  }
+  if (!transportError && isConfirmedOltAction(response)) return response;
+  const classification = transportError && (response === undefined || classifyOltAction(response) === 'confirmed')
+    ? 'transport_error' : classifyOltAction(response);
+  const diagnostic = {
+    fiberId, phase, classification, response,
+    httpStatus: Number.isInteger(transportError?.response?.status) ? transportError.response.status : undefined,
+    errorCode: /^[A-Z_]{1,40}$/.test(transportError?.code || '') ? transportError.code : undefined,
+  };
+  let reference;
+  try { reference = await saveResponse(diagnostic); } catch {
+    console.error(JSON.stringify({ event: 'olt_response_capture_failed', fiberId, phase }));
+  }
+  console.error(JSON.stringify({ event: 'olt_action_unconfirmed', fiberId, phase, classification, reference, httpStatus: diagnostic.httpStatus, errorCode: diagnostic.errorCode }));
+  const action = phase === 'deauthorize' ? 'desprovisao' : 'regravacao';
+  const detail = classification === 'transport_error' ? 'A consulta terminou sem resposta do IXC.'
+    : classification === 'ixc_rejected' ? 'O IXC retornou uma indicacao de erro.'
+    : 'O retorno recebido nao comprovou a conclusao da operacao.';
+  throw Error(`IXC nao confirmou a ${action}. ${detail}${reference ? ` Referencia para o NOC: ${reference}.` : ''} Acione o NOC antes de repetir.`);
+}
+
+export async function reprovisionExisting(ixc, { client, contract, login, fiber, mode, profile, dryRun = false, onWaiting = async () => {} }, { wait = delay, saveResponse = saveOltResponse } = {}) {
   const key = String(fiber.id);
   if (busy.has(key)) throw Error('Este equipamento ja esta em processamento. Aguarde.');
   busy.add(key);
@@ -45,8 +74,7 @@ export async function reprovisionExisting(ixc, { client, contract, login, fiber,
     if (dryRun) return { simulated: true };
     await ixc.ensureOnuAuthorizationApiAvailable();
     phase = 'deauthorize';
-    const removed = await ixc.actionPost('botao_excluir_dispositivo_22434', { id: key });
-    if (!isConfirmedOltAction(removed)) throw Error('IXC nao confirmou a desprovisao. Acione o NOC antes de repetir.');
+    await runReprovisionOltAction(() => ixc.actionPost('botao_excluir_dispositivo_22434', { id: key }), { fiberId: key, phase }, saveResponse);
     phase = 'wait_after_deauthorize';
     // Falha ao avisar o operador nao deve impedir a recuperacao da ONU.
     try { await onWaiting(); } catch {
@@ -63,8 +91,7 @@ export async function reprovisionExisting(ixc, { client, contract, login, fiber,
       if (!same(await ixc.read('radpop_radio_cliente_fibra', key), expected)) throw Error('Script nao persistiu no cadastro. Acione o NOC para recuperar o equipamento.');
     }
     phase = 'authorize';
-    const authorized = await ixc.authorizeOnu(key);
-    if (!isConfirmedOltAction(authorized)) throw Error('IXC nao confirmou a regravacao. Acione o NOC para recuperar o equipamento.');
+    await runReprovisionOltAction(() => ixc.authorizeOnu(key), { fiberId: key, phase }, saveResponse);
     phase = 'verify';
     const confirmed = await ixc.read('radpop_radio_cliente_fibra', key);
     if (!same(confirmed, expected)) throw Error('Regravacao enviada, mas cadastro divergiu. Acione o NOC para conferir.');
