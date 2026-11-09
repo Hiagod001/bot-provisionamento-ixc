@@ -1,5 +1,8 @@
 import axios from 'axios';
 import https from 'node:https';
+import { saveOltResponse } from './oltResponseAudit.js';
+
+export const ONU_AUTHORIZATION_TIMEOUT_MS = 180000;
 
 const normalizeToken = (token) => (token.startsWith('Basic ') ? token : `Basic ${token}`);
 const pendingOltModels = ['HW', 'FH', 'ZTE', 'DC', 'HW2', 'FKG', 'FK', 'INB', 'DIG', 'NK', 'FBT', 'FKWGL', 'VSOL', 'RAISE', 'FB6001', 'ZYXEL', 'FKC', 'CIAGPON', 'ZTEC610', 'VSOLGPON', 'PK', 'PHYHOME', '2FLEX', 'INTELBRASG16', 'TPLINK', 'SMARTOLT', 'TH', 'TPLINKP700X'];
@@ -482,13 +485,13 @@ export class IxcClient {
     return dataRows(response);
   }
 
-  async read(table, id) {
+  async read(table, id, options) {
     const rows = await this.list(table, {
       qtype: `${table}.id`,
       query: String(id),
       oper: '=',
       rp: '1',
-    });
+    }, options);
     return rows[0] ?? null;
   }
 
@@ -514,8 +517,8 @@ export class IxcClient {
     return response.data;
   }
 
-  async actionPost(resource, data = {}) {
-    const response = await this.http.post(`/${resource}`, data);
+  async actionPost(resource, data = {}, { timeoutMs } = {}) {
+    const response = await this.http.post(`/${resource}`, data, timeoutMs ? { timeout: timeoutMs } : undefined);
     return response.data;
   }
 
@@ -1091,7 +1094,7 @@ export class IxcClient {
     };
   }
 
-  async findFiberClientsByMac(mac) {
+  async findFiberClientsByMac(mac, options) {
     return this.list('radpop_radio_cliente_fibra', {
       qtype: 'radpop_radio_cliente_fibra.mac',
       query: String(mac),
@@ -1099,7 +1102,7 @@ export class IxcClient {
       rp: '20',
       sortname: 'radpop_radio_cliente_fibra.id',
       sortorder: 'desc',
-    });
+    }, options);
   }
 
   async ensureOnuAuthorizationApiAvailable() {
@@ -1115,7 +1118,7 @@ export class IxcClient {
   async authorizeOnu(fiberId) {
     const response = await this.actionPost('botao_gravar_dispositivo_22408', {
       id: String(fiberId),
-    });
+    }, { timeoutMs: ONU_AUTHORIZATION_TIMEOUT_MS });
     try { assertNotIxcError(response, 'gravar ONU no dispositivo pela API'); } catch (error) {
       // Disponivel apenas para captura restrita; nao imprimir a resposta bruta.
       error.ixcResponse = response;
@@ -1128,8 +1131,11 @@ export class IxcClient {
     if (!pendingOnuId) throw new Error('O IXC nao retornou o ID original da ONU pendente.');
     const response = await this.actionPost('fh_onu_nao_autorizadas_22396', {
       get_id: String(pendingOnuId),
-    });
-    assertNotIxcError(response, 'autorizar ONU pela API');
+    }, { timeoutMs: ONU_AUTHORIZATION_TIMEOUT_MS });
+    try { assertNotIxcError(response, 'autorizar ONU pela API'); } catch (error) {
+      error.ixcResponse = response;
+      throw error;
+    }
     return response;
   }
 
@@ -1354,53 +1360,107 @@ export class IxcClient {
     });
   }
 
-  async provisionOnu(payload) {
-    const prepared = await this.prepareProvisionPayload(payload);
-    await this.ensureOnuAuthorizationApiAvailable();
-    const [macDuplicates, loginDuplicates] = await Promise.all([
-      this.findFiberClientsByMac(prepared.clienteFibra.mac),
-      this.findFiberClientsByLogin(prepared.clienteFibra.id_login),
-    ]);
-    const duplicates = [
-      ...new Map(
-        [...macDuplicates, ...loginDuplicates].map((duplicate) => [String(duplicate.id), duplicate])
-      ).values(),
-    ];
-    for (const duplicate of duplicates) {
-      console.log(
-        `Removendo cadastro de fibra antigo ${duplicate.id} antes do novo provisionamento.`
-      );
-      await this.removeDuplicateFiberClient(duplicate.id);
-    }
-    if (duplicates.length) {
-      const [remainingByMac, remainingByLogin] = await Promise.all([
+  async provisionOnu(payload, { onProgress = async () => {}, saveResponse = saveOltResponse } = {}) {
+    let phase = 'prepare', mutationStarted = false, prepared, provisionedOnu;
+    const step = async (name, operation, mutates = false) => {
+      phase = name;
+      if (mutates) mutationStarted = true;
+      console.info(JSON.stringify({ event: 'provision_stage', at: new Date().toISOString(), phase, fiberId: provisionedOnu?.id, loginId: payload.clienteFibra?.id_login, olt: payload.clienteFibra?.id_transmissor }));
+      if (name === 'authorize_pending' || name === 'authorize_device') {
+        try { await onProgress(name); } catch {
+          console.warn(JSON.stringify({ event: 'provision_notice_failed', phase }));
+        }
+      }
+      return operation();
+    };
+    try {
+      prepared = await step('prepare', () => this.prepareProvisionPayload(payload));
+      await step('preflight', () => this.ensureOnuAuthorizationApiAvailable());
+      phase = 'find_duplicates';
+      const [macDuplicates, loginDuplicates] = await Promise.all([
         this.findFiberClientsByMac(prepared.clienteFibra.mac),
         this.findFiberClientsByLogin(prepared.clienteFibra.id_login),
       ]);
-      const remainingDuplicates = [...remainingByMac, ...remainingByLogin];
-      if (remainingDuplicates.length) {
-        throw new Error('O cadastro antigo da ONU permaneceu no IXC apos a tentativa de limpeza.');
+      const duplicates = [
+        ...new Map(
+          [...macDuplicates, ...loginDuplicates].map((duplicate) => [String(duplicate.id), duplicate])
+        ).values(),
+      ];
+      for (const duplicate of duplicates) {
+        console.log(
+          `Removendo cadastro de fibra antigo ${duplicate.id} antes do novo provisionamento.`
+        );
+        await step('remove_duplicate', () => this.removeDuplicateFiberClient(duplicate.id), true);
       }
+      if (duplicates.length) {
+        phase = 'verify_duplicates';
+        const [remainingByMac, remainingByLogin] = await Promise.all([
+          this.findFiberClientsByMac(prepared.clienteFibra.mac),
+          this.findFiberClientsByLogin(prepared.clienteFibra.id_login),
+        ]);
+        const remainingDuplicates = [...remainingByMac, ...remainingByLogin];
+        if (remainingDuplicates.length) {
+          throw new Error('O cadastro antigo da ONU permaneceu no IXC apos a tentativa de limpeza.');
+        }
+      }
+      const createResponse = await step('create_fiber', () => this.create('radpop_radio_cliente_fibra', prepared.clienteFibra), true);
+      try { assertNotIxcError(createResponse, 'provisionar ONU'); } catch (error) {
+        error.ixcResponse = createResponse;
+        throw error;
+      }
+
+      provisionedOnu = await step('find_created_fiber', () => this.findProvisionedOnu({
+        createResponse,
+        mac: prepared.clienteFibra.mac,
+        loginId: prepared.clienteFibra.id_login,
+        contractId: prepared.clienteFibra.id_contrato,
+      }));
+      if (!provisionedOnu?.id) throw new Error('Cadastro salvo, mas o IXC nao retornou o ID da ONU.');
+
+      await step('authorize_pending', () => this.authorizePendingOnu(prepared.pendingOnuId), true);
+      await step('authorize_device', () => this.authorizeOnu(provisionedOnu.id), true);
+      const confirmed = await step('verify', () => this.read('radpop_radio_cliente_fibra', provisionedOnu.id));
+      if (!confirmed || ['mac', 'id_login', 'id_contrato', 'id_transmissor'].some(key =>
+        prepared.clienteFibra[key] && String(confirmed[key] || '').toUpperCase() !== String(prepared.clienteFibra[key]).toUpperCase())) {
+        throw Error('O cadastro final divergiu dos dados enviados. Confira com o NOC.');
+      }
+
+      return {
+        createResponse,
+        provisionedOnu: confirmed,
+        authorized: true,
+      };
+    } catch (error) {
+      if (!mutationStarted) throw error;
+      // Depois de enviar uma escrita, timeout nao significa que o IXC a cancelou.
+      // Conferir apenas o cadastro; nunca repetir/remover automaticamente nem
+      // considerar existencia do cadastro como prova de configuracao concluida.
+      let observed;
+      try {
+        const readOptions = { timeoutMs: 10000, retryTransient: false, strictResponse: true };
+        const rows = provisionedOnu?.id
+          ? [await this.read('radpop_radio_cliente_fibra', provisionedOnu.id, readOptions)]
+          : await this.findFiberClientsByMac(prepared.clienteFibra.mac, readOptions);
+        const matching = rows.filter(row => row && ['mac', 'id_login', 'id_contrato', 'id_transmissor'].every(key =>
+          !prepared.clienteFibra[key] || String(row[key] || '').toUpperCase() === String(prepared.clienteFibra[key]).toUpperCase()));
+        if (matching.length === 1) observed = matching[0];
+      } catch { /* A falha da conferencia nao libera nova tentativa. */ }
+      let reference;
+      const timeout = /timeout|ETIMEDOUT|ECONNABORTED/i.test(`${error?.code || ''} ${error?.message || ''}`);
+      try {
+        reference = await saveResponse({ fiberId: observed?.id || provisionedOnu?.id || null, phase,
+          classification: timeout ? 'transport_timeout' : 'provision_incomplete',
+          response: error?.ixcResponse ?? error?.response?.data,
+          httpStatus: Number.isInteger(error?.response?.status) ? error.response.status : undefined,
+          errorCode: /^[A-Z_]{1,40}$/.test(error?.code || '') ? error.code : undefined });
+      } catch { console.warn(JSON.stringify({ event: 'provision_capture_failed', phase })); }
+      console.error(JSON.stringify({ event: 'provision_unconfirmed', at: new Date().toISOString(), phase, fiberId: observed?.id || provisionedOnu?.id, reference, timeout }));
+      const message = timeout
+        ? 'O IXC demorou para responder e pode continuar executando a operacao.'
+        : 'Nao foi possivel confirmar a conclusao no IXC apos iniciar as alteracoes.';
+      throw Object.assign(Error(`${message}${observed ? ' O cadastro de fibra foi localizado, mas isso nao confirma que o provisionamento terminou.' : ''} Nao repita: o NOC precisa conferir o equipamento.${reference ? ` Referencia: ${reference}.` : ''}`), {
+        code: 'PROVISION_RESULT_UNCERTAIN', phase, provisionMutationStarted: true, reference,
+      });
     }
-    const createResponse = await this.create('radpop_radio_cliente_fibra', prepared.clienteFibra);
-    assertNotIxcError(createResponse, 'provisionar ONU');
-
-    const provisionedOnu = await this.findProvisionedOnu({
-      createResponse,
-      mac: prepared.clienteFibra.mac,
-      loginId: prepared.clienteFibra.id_login,
-      contractId: prepared.clienteFibra.id_contrato,
-    });
-    if (!provisionedOnu?.id) throw new Error('Cadastro salvo, mas o IXC nao retornou o ID da ONU.');
-
-    await this.authorizePendingOnu(prepared.pendingOnuId);
-    await this.authorizeOnu(provisionedOnu.id);
-    const confirmed = await this.read('radpop_radio_cliente_fibra', provisionedOnu.id);
-
-    return {
-      createResponse,
-      provisionedOnu: confirmed || provisionedOnu,
-      authorized: true,
-    };
   }
 }

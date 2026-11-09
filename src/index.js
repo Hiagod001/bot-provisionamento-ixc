@@ -6,7 +6,9 @@ import { registerFlow } from './flow.js';
 
 dns.setDefaultResultOrder('ipv4first');
 
-const bot = new Telegraf(config.telegramBotToken);
+// O fluxo inclui duas autorizacoes de ate 3 minutos e conferencias no IXC.
+// O limite padrao de 90 segundos encerrava a resposta antes dessas etapas.
+const bot = new Telegraf(config.telegramBotToken, { handlerTimeout: 15 * 60 * 1000 });
 const ixc = new IxcClient(config.ixc);
 
 registerFlow(bot, ixc, config);

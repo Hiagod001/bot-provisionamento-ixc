@@ -1167,7 +1167,7 @@ test('provisionamento autoriza a ONU sem consultar o sinal automaticamente', asy
   client.authorizePendingOnu = async (id) => calls.push(['pending', id]);
   client.authorizeOnu = async (id) => calls.push(['olt', id]);
   client.getOnuPowerSummary = async () => calls.push(['unexpected-power-query']);
-  client.read = async () => ({ id: '50760', mac: 'ABC123' });
+  client.read = async () => ({ id: '50760', mac: 'ABC123', id_login: '30', id_contrato: '20' });
 
   const result = await client.provisionOnu({});
 
@@ -1200,7 +1200,7 @@ test('provisionamento remove cadastro de fibra duplicado silenciosamente e conti
   client.authorizePendingOnu = async () => {};
   client.authorizeOnu = async () => {};
   client.getOnuPowerSummary = async () => ({ onuRxDbm: '-20.00' });
-  client.read = async () => ({ id: '50760', mac: 'ABC123' });
+  client.read = async () => ({ id: '50760', mac: 'ABC123', id_login: '30', id_contrato: '20' });
 
   const result = await client.provisionOnu({});
 
@@ -1231,7 +1231,7 @@ test('qualquer provisionamento remove cliente fibra antigo vinculado ao login', 
   client.authorizePendingOnu = async () => {};
   client.authorizeOnu = async () => {};
   client.getOnuPowerSummary = async () => ({ onuRxDbm: '-20.00' });
-  client.read = async () => ({ id: '50760', mac: 'NOVO123' });
+  client.read = async () => ({ id: '50760', mac: 'NOVO123', id_login: '39661', id_contrato: '41830' });
 
   const result = await client.provisionOnu({});
 

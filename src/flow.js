@@ -53,6 +53,15 @@ export const classifyFlowError = (error) => {
   return 'operation_failed';
 };
 
+export const reportUncertainProvision = async (ctx, state, error) => {
+  if (!(error?.provisionMutationStarted || state.moveRemovalStarted || state.moveOldRemoved || state.provisionApplied)) return false;
+  state.step = 'provision_uncertain';
+  await ctx.reply(error?.code === 'PROVISION_RESULT_UNCERTAIN'
+    ? error.message
+    : 'A operacao ja iniciou alteracoes no IXC, mas nao foi possivel confirmar a conclusao. Nao repita o provisionamento. Acione o NOC para conferir o cadastro e o equipamento.', provisionKeyboard());
+  return true;
+};
+
 export const formatBoxIdentification = (boxes) => boxes.length
   ? `Caixas cadastradas proximas (ate 300 m):\n\n${boxes.map((box, i) => `${i + 1}. ${box.descricao || box.nome || 'Caixa sem nome'} — ${box.distanceMeters} m`).join('\n')}\n\nA mais proxima e uma candidata, nao uma identificacao garantida. Confira o ponto em campo: o GPS e as coordenadas do cadastro podem ter diferenca.\nEnvie outra localizacao para consultar novamente ou /cancelar para sair.`
   : 'Nao encontrei caixas ativas com coordenadas em ate 300 m. Envie a localizacao mais perto da caixa ou confira o cadastro com o NOC.';
@@ -944,7 +953,7 @@ const selectByCallback = async (ctx, prefix, expectedStep, field, nextStep, next
 };
 
 export const validateMoveDestination = async (state, ixc, payload) => {
-  if (state.moveOldRemoved) throw Error('A ONU antiga ja foi removida nesta tentativa. Acione o NOC para conferir antes de repetir.');
+  if (state.moveOldRemoved || state.moveRemovalStarted) throw Error('A remocao da ONU antiga ja foi iniciada nesta tentativa. Acione o NOC para conferir antes de repetir.');
   const old = await ixc.read('radpop_radio_cliente_fibra', state.oldFiber?.id);
   if (!old || ['id_login', 'id_contrato', 'mac', 'id_transmissor', 'id_caixa_ftth', 'porta_ftth'].some(k => String(old[k] || '') !== String(state.oldFiber[k] || '')) || String(old.id_login) !== String(state.login.id) || String(old.id_contrato) !== String(state.contract.id)) throw Error('Cadastro antigo mudou. Nada foi removido. Reinicie a consulta.');
   const login = await ixc.read('radusuarios', state.login.id);
@@ -1775,12 +1784,18 @@ export const registerFlow = (bot, ixc, config) => {
       }
       if (state.serviceType === 'mudanca' && state.moveSwapOnu !== undefined) {
         await validateMoveDestination(state, ixc, payload);
+        state.moveRemovalStarted = true;
         await ixc.removeAuthorizedOnu(state.oldFiber.id);
         state.moveOldRemoved = true;
         await clearLoginMacWithWarning(ctx, state, ixc);
       }
       await activateContractWithWarning(ctx, state, ixc);
-      const result = await ixc.provisionOnu(payload);
+      const result = await ixc.provisionOnu(payload, {
+        onProgress: phase => ctx.reply(phase === 'authorize_pending'
+          ? 'Autorizando a ONU no IXC. Esta etapa pode levar ate 3 minutos. Aguarde; nao clique novamente.'
+          : 'Aplicando a configuracao da ONU na OLT. Esta etapa pode levar ate 3 minutos. Aguarde a confirmacao.'),
+      });
+      state.provisionApplied = true;
       await ctx.reply(
         buildProvisionSuccessMessage(state, result.provisionedOnu),
         credentialsCopyKeyboard(state.login?.login, state.login?.senha)
@@ -1827,6 +1842,7 @@ export const registerFlow = (bot, ixc, config) => {
         error?.message || error
       );
       console.log(JSON.stringify({ event: 'flow_operation_error', at: new Date().toISOString(), step: state.step, service: state.serviceType, errorCode: classifyFlowError(error) }));
+      if (await reportUncertainProvision(ctx, state, error)) return;
       state.step = 'retry';
       const reason = String(error?.message || 'Falha ao consultar o IXC.')
         .replace(/<[^>]+>/g, ' ')

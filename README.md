@@ -74,6 +74,8 @@ npm.cmd run dev
 
 ### Reprovisionamento e selecao de perfil
 
+As duas acoes de autorizacao (`fh_onu_nao_autorizadas_22396` e `botao_gravar_dispositivo_22408`) aguardam ate 180 segundos cada, sem repetir escritas em caso de timeout. O handler do Telegram permite ate 15 minutos para o fluxo completo, em vez do limite padrao de 90 segundos. O tecnico recebe aviso de cada etapa. Se houver falha depois de iniciar alteracoes, o bot faz uma conferencia somente de leitura (ate 10 segundos, sem retry), registra etapa e referencia restrita, e nao oferece `Tentar novamente`. Cadastro existente nao comprova configuracao concluida. O NOC deve reconciliar o estado do IXC/OLT antes de uma nova operacao; nenhuma medicao automatica de sinal foi adicionada.
+
 Na confirmacao de mudanca de endereco, a revalidacao da ONU consulta apenas a OLT de destino ja selecionada. Cada leitura tem ate 30 segundos, com no maximo duas tentativas para falhas transitorias de comunicacao e limite total de 60 segundos. Erros de permissao/resposta invalida nao sao repetidos nem tratados como fila vazia. Serial completo, OLT, slot e PON ainda precisam coincidir antes de remover a ONU antiga. A busca inicial por serial continua consultando todas as OLTs.
 
 O tipo bridge/integrada vem do perfil antigo. O bot seleciona o perfil existente aprovado para a OLT de destino em `src/provisionProfiles.js`; nao escolhe por data de criacao nem pelo fabricante da ONU. Apenas cadastros sem perfil anterior perguntam o tipo ao operador. Perfil antigo ilegivel, tipo ambiguo ou OLT sem mapeamento bloqueiam a operacao para conferencia do NOC.

@@ -34,7 +34,8 @@ test('mudanca pergunta sobre ONU e segue para cliente em ambas as escolhas', asy
 });
 
 test('mudanca bloqueia antes da remocao se vinculo mudou ou tentativa ja removeu ONU', async () => {
-  await assert.rejects(validateMoveDestination({ moveOldRemoved: true }, {}, {}), /ja foi removida/);
+  await assert.rejects(validateMoveDestination({ moveOldRemoved: true }, {}, {}), /remocao.*ja foi iniciada/);
+  await assert.rejects(validateMoveDestination({ moveRemovalStarted: true }, {}, {}), /remocao.*ja foi iniciada/);
   const old = { id: '1', id_login: '2', id_contrato: '3', mac: 'OLD' };
   await assert.rejects(validateMoveDestination({ oldFiber: old, login: { id: '2' }, contract: { id: '3' } }, { read: async () => ({ ...old, mac: 'CHANGED' }) }, {}), /Cadastro antigo mudou/);
 });
