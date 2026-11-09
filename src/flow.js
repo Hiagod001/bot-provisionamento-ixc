@@ -952,7 +952,8 @@ export const validateMoveDestination = async (state, ixc, payload) => {
   const box = await ixc.read('rad_caixa_ftth', state.box.id);
   if (!box || box.status !== 'A' || (isSgaOnu(state) ? !isSgaDefaultBox(box) : !isAllowedProvisionBox(box, state.onu.id_olt))) throw Error('Caixa de destino indisponivel. Nada foi removido.');
   if (!isSgaOnu(state) && !(await ixc.findFreeBoxPorts(box)).map(String).includes(String(state.dropPort))) throw Error('Porta de destino ocupada. Nada foi removido.');
-  const pending = await ixc.findPendingOnusBySerialSuffix(state.onu.mac || state.onu.Chassi);
+  if (!/^[1-9]\d*$/.test(String(state.onu?.id_olt || ''))) throw Error('OLT de destino invalida. Nada foi removido. Reinicie a consulta.');
+  const pending = await ixc.findPendingOnusBySerialSuffix(state.onu.mac || state.onu.Chassi, { oltId: state.onu.id_olt });
   if (!pending.some(o => String(o.id) === String(state.onu.id) && String(o.id_olt) === String(state.onu.id_olt) && String(o.mac || o.Chassi).toUpperCase() === String(state.onu.mac || state.onu.Chassi).toUpperCase() && String(o.slotno) === String(state.onu.slotno) && String(o.ponno) === String(state.onu.ponno))) throw Error('ONU de destino mudou ou nao esta mais pendente. Nada foi removido.');
   await ixc.prepareProvisionPayload(payload);
   await ixc.ensureOnuAuthorizationApiAvailable();
@@ -1832,8 +1833,11 @@ export const registerFlow = (bot, ixc, config) => {
         .replace(/\s+/g, ' ')
         .trim()
         .slice(0, 350);
+      const guidance = error?.code === 'ONU_TARGET_TIMEOUT'
+        ? 'Use Tentar novamente. Se a OLT continuar sem responder, acione o NOC.'
+        : 'Apos o NOC corrigir, tente novamente.';
       await ctx.reply(
-        `Nao consegui provisionar.\n${reason}\n\nApos o NOC corrigir, tente novamente.`,
+        `Nao consegui provisionar.\n${reason}\n\n${guidance}`,
         retryProvisionKeyboard()
       );
     }

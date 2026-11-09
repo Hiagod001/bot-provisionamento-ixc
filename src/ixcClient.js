@@ -526,15 +526,52 @@ export class IxcClient {
     return response.data;
   }
 
-  async findPendingOnusBySerialSuffix(serialSuffix) {
+  async findPendingOnusBySerialSuffix(serialSuffix, { oltId } = {}) {
     const suffix = String(serialSuffix).trim();
-    const rows = await this.listPendingOnus({ refresh: true });
-    const matches = this.filterPendingOnusBySerialSuffix(rows, suffix);
-    console.info(JSON.stringify({ event: 'onu_search', at: new Date().toISOString(), suffix: suffix.slice(-4), matches: matches.length, rows: rows.length, failedOlts: rows.failedOlts || [] }));
+    const scoped = oltId !== undefined;
+    const rows = scoped ? await this.listPendingOnusForOlt(oltId) : await this.listPendingOnus();
+    const matches = this.filterPendingOnusBySerialSuffix(rows, suffix)
+      .filter(onu => !scoped || String(onu.id_olt) === String(oltId));
+    console.info(JSON.stringify({ event: 'onu_search', at: new Date().toISOString(), olt: scoped ? String(oltId) : undefined, suffix: suffix.slice(-4), matches: matches.length, rows: rows.length, failedOlts: rows.failedOlts || [] }));
     if (!matches.length && rows.failedOlts?.length) {
       throw new Error('A consulta de algumas OLTs nao terminou. Nao foi possivel confirmar esse serial. Aguarde e tente novamente.');
     }
     return matches;
+  }
+
+  async listPendingOnusForOlt(oltId) {
+    const id = String(oltId);
+    if (!/^[1-9]\d*$/.test(id)) throw new Error('OLT de destino invalida. Reinicie a consulta.');
+    // Nao reaproveitar a varredura global nem resultados de consultas anteriores.
+    this.pendingOnuRefreshByOlt ||= new Map();
+    if (this.pendingOnuRefreshByOlt.has(id)) return this.pendingOnuRefreshByOlt.get(id);
+    const refresh = this.refreshPendingOnusForOlt(id);
+    this.pendingOnuRefreshByOlt.set(id, refresh);
+    try { return await refresh; }
+    finally { if (this.pendingOnuRefreshByOlt.get(id) === refresh) this.pendingOnuRefreshByOlt.delete(id); }
+  }
+
+  async refreshPendingOnusForOlt(id) {
+    const started = Date.now();
+    const deadline = started + 60000;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      try {
+        const rows = await this.list('fh_onu_nao_autorizadas', {
+          page: 1, rp: 10000, sortname: '', sortorder: 'asc', query: '', qtype: '', oper: 'L',
+          grid_param: JSON.stringify([{ TB: 'id_olt', OP: '=', P: id }]), grid_param2: false,
+        }, { timeoutMs: Math.min(30000, remaining), retryTransient: false, strictResponse: true });
+        console.info(JSON.stringify({ event: 'onu_target_refresh', at: new Date().toISOString(), olt: id, attempt, rows: rows.length, durationMs: Date.now() - started }));
+        return rows;
+      } catch (error) {
+        console.warn(JSON.stringify({ event: 'onu_target_failed', at: new Date().toISOString(), olt: id, attempt, code: error?.code || 'IXC_RESPONSE_ERROR', durationMs: Date.now() - started }));
+        if (!['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN'].includes(error?.code)) {
+          throw new Error('O IXC nao confirmou a consulta da OLT de destino. Acione o NOC para conferir a resposta e as permissoes. Nada foi removido.');
+        }
+      }
+    }
+    throw Object.assign(new Error('A OLT de destino nao respondeu dentro do limite de tempo. Nada foi removido. Aguarde e tente novamente.'), { code: 'ONU_TARGET_TIMEOUT' });
   }
 
   async listPendingOnus() {

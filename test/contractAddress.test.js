@@ -39,6 +39,38 @@ test('mudanca bloqueia antes da remocao se vinculo mudou ou tentativa ja removeu
   await assert.rejects(validateMoveDestination({ oldFiber: old, login: { id: '2' }, contract: { id: '3' } }, { read: async () => ({ ...old, mac: 'CHANGED' }) }, {}), /Cadastro antigo mudou/);
 });
 
+test('mudanca revalida serial, slot e PON somente na OLT de destino antes da remocao', async () => {
+  const old = { id: '40', id_login: '30', id_contrato: '20', mac: 'OLD', id_transmissor: '1', id_caixa_ftth: '2', porta_ftth: '3' };
+  const state = {
+    oldFiber: old, login: { id: '30' }, contract: { id: '20' }, client: { id: '10' }, box: { id: '4' }, dropPort: '5',
+    onu: { id: 'pending', id_olt: '1', mac: 'HWTC54B5', slotno: '2', ponno: '0' },
+  };
+  let prepared = 0, result = [{ ...state.onu }];
+  const ixc = {
+    read: async table => ({
+      radpop_radio_cliente_fibra: old,
+      radusuarios: { id_contrato: '20', id_cliente: '10' },
+      rad_caixa_ftth: { id: '4', status: 'A', id_projeto: '1' },
+    })[table],
+    findFreeBoxPorts: async () => ['5'],
+    findPendingOnusBySerialSuffix: async (serial, options) => {
+      assert.equal(serial, 'HWTC54B5'); assert.deepEqual(options, { oltId: '1' });
+      return result;
+    },
+    prepareProvisionPayload: async () => { prepared++; },
+    ensureOnuAuthorizationApiAvailable: async () => {},
+  };
+  await validateMoveDestination(state, ixc, {});
+  assert.equal(prepared, 1);
+  for (const change of [{ id_olt: '5' }, { mac: 'OTHER' }, { slotno: '3' }, { ponno: '1' }]) {
+    result = [{ ...state.onu, ...change }];
+    await assert.rejects(validateMoveDestination(state, ixc, {}), /Nada foi removido/);
+  }
+  ixc.findPendingOnusBySerialSuffix = async () => { throw Object.assign(Error('Destino sem resposta'), { code: 'ONU_TARGET_TIMEOUT' }); };
+  await assert.rejects(validateMoveDestination(state, ixc, {}), e => e.code === 'ONU_TARGET_TIMEOUT');
+  assert.equal(prepared, 1);
+});
+
 const reproFixture = () => {
   const client = { id: '10' }, contract = { id: '20', id_cliente: '10', status: 'A', endereco: 'Rua Teste', numero: '77' }, login = { id: '30', id_cliente: '10', id_contrato: '20', login: 'teste' };
   const profile = { id: '94', nome: 'ONU-INTEGRADA-OLT HUAWEI', comando: 'integrated commands' };

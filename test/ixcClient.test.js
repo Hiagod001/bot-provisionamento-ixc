@@ -1612,6 +1612,66 @@ test('consulta critica de OLT respeita timeout curto sem repetir automaticamente
   assert.equal(calls, 1);
 });
 
+test('confirmacao consulta apenas a OLT selecionada com timeout maior e filtra outras OLTs', async () => {
+  const client = Object.create(IxcClient.prototype);
+  client.listPendingOnus = async () => { throw Error('Nao deve consultar todas'); };
+  client.list = async (table, params, options) => {
+    assert.equal(table, 'fh_onu_nao_autorizadas');
+    assert.deepEqual(JSON.parse(params.grid_param), [{ TB: 'id_olt', OP: '=', P: '1' }]);
+    assert.equal(options.timeoutMs, 30000);
+    assert.equal(options.retryTransient, false);
+    assert.equal(options.strictResponse, true);
+    return [{ id: 'ptc', mac: 'HWTC54B5', id_olt: '1' }, { id: 'other', mac: 'HWTC54B5', id_olt: '5' }];
+  };
+  const matches = await client.findPendingOnusBySerialSuffix('54b5', { oltId: '1' });
+  assert.deepEqual(matches.map(o => o.id), ['ptc']);
+  await assert.rejects(client.findPendingOnusBySerialSuffix('54b5', { oltId: '' }), /OLT de destino invalida/);
+});
+
+test('consulta da OLT selecionada repete somente leitura transitoria e respeita limite total', async t => {
+  const client = Object.create(IxcClient.prototype);
+  let now = 0, calls = 0;
+  t.mock.method(Date, 'now', () => now);
+  client.list = async (table, params, options) => {
+    calls++;
+    if (calls === 1) {
+      assert.equal(options.timeoutMs, 30000);
+      now = 40000;
+      throw Object.assign(Error('timeout'), { code: 'ECONNABORTED' });
+    }
+    assert.equal(options.timeoutMs, 20000);
+    return [{ id: 'fresh', mac: 'HWTC54B5', id_olt: '1' }];
+  };
+  assert.equal((await client.findPendingOnusBySerialSuffix('54b5', { oltId: 1 }))[0].id, 'fresh');
+  assert.equal(calls, 2);
+});
+
+test('timeout da OLT selecionada nao vira fila vazia e nao excede duas leituras', async () => {
+  const client = Object.create(IxcClient.prototype);
+  let calls = 0;
+  client.list = async () => { calls++; throw Object.assign(Error('timeout'), { code: 'ECONNABORTED' }); };
+  await assert.rejects(client.findPendingOnusBySerialSuffix('54b5', { oltId: 1 }), e => e.code === 'ONU_TARGET_TIMEOUT');
+  assert.equal(calls, 2);
+  client.list = async () => { calls++; throw Error('Sem permissao'); };
+  await assert.rejects(client.findPendingOnusBySerialSuffix('54b5', { oltId: 1 }), /permissoes/);
+  assert.equal(calls, 3);
+  client.list = async () => [];
+  assert.deepEqual(await client.findPendingOnusBySerialSuffix('54b5', { oltId: 1 }), []);
+});
+
+test('consultas simultaneas compartilham apenas a mesma OLT em andamento e depois renovam', async () => {
+  const client = Object.create(IxcClient.prototype), releases = new Map();
+  let calls = 0;
+  client.refreshPendingOnusForOlt = id => { calls++; return new Promise(resolve => releases.set(id, resolve)); };
+  const a = client.listPendingOnusForOlt('1'), b = client.listPendingOnusForOlt('1'), c = client.listPendingOnusForOlt('5');
+  assert.equal(calls, 2);
+  releases.get('1')([]); releases.get('5')([]);
+  await Promise.all([a,b,c]);
+  const next = client.listPendingOnusForOlt('1');
+  releases.get('1')([]); await next;
+  assert.equal(calls, 3);
+});
+
 test('falha em todas as OLTs nao resulta em serial inexistente', async () => {
   const client = Object.create(IxcClient.prototype);
   client.pendingOltIds = ['6'];
