@@ -1600,7 +1600,7 @@ export const registerFlow = (bot, ixc, config) => {
     console.log(JSON.stringify({ event: 'swap_preserve_box', at: new Date().toISOString(), contractId: state.contract.id, fiberId: oldFiber.id, boxId: box.id, port: sgaBox ? '0' : oldFiber.porta_ftth }));
     // Revalidar o perfil antes de remover: pode ter sido editado por outro operador.
     try {
-      const resolved = await resolveProvisionProfiles(ixc, { oltId: state.onu?.id_olt || state.olt?.id, oldFiber, mode: profileMode(state.profile) });
+      const resolved = await resolveProvisionProfiles(ixc, { oltId: state.onu?.id_olt || state.olt?.id, oldFiber: isNewOnuReplacement(state) ? undefined : oldFiber, mode: profileMode(state.profile) });
       if (!resolved.profile) throw Error('Escolha o tipo de equipamento antes de remover a ONU antiga.');
       state.profile = resolved.profile;
     } catch (error) {
@@ -1775,7 +1775,7 @@ export const registerFlow = (bot, ixc, config) => {
     try {
       const latest = await resolveProvisionProfiles(ixc, {
         oltId: state.onu?.id_olt || state.olt?.id,
-        oldFiber: state.oldFiber || state.previousFiber,
+        oldFiber: isNewOnuReplacement(state) ? undefined : state.oldFiber || state.previousFiber,
         mode: profileMode(state.profile),
       });
       if (!latest.profile || String(latest.profile.id) !== String(state.profile.id) ||
@@ -2210,6 +2210,10 @@ const finishProfileChoice = async (ctx, state, ixc) => {
   await ctx.reply(buildSummary(state), confirmKeyboard());
 };
 
+const isNewOnuReplacement = state =>
+  (state.serviceType === 'troca' && !isRouterReplacement(state)) ||
+  (state.serviceType === 'mudanca' && state.moveSwapOnu === true);
+
 export const askProfile = async (ctx, state, ixc) => {
   await loadOlt(state, ixc);
   try {
@@ -2222,18 +2226,21 @@ export const askProfile = async (ctx, state, ixc) => {
     if (oldFiber) state.previousFiber = oldFiber;
     const resolved = await resolveProvisionProfiles(ixc, {
       oltId: state.onu?.id_olt || state.olt?.id || oldFiber?.id_transmissor,
-      oldFiber, mode: state.previousFiber ? profileMode(state.profile) : undefined,
+      oldFiber: isNewOnuReplacement(state) ? undefined : oldFiber,
+      mode: state.previousFiber ? profileMode(state.profile) : undefined,
     });
     if (resolved.profile) {
       state.profile = resolved.profile;
       clearMenuChoices(state);
-      const origin = Number(oldFiber?.id_perfil) > 0 ? 'Tipo identificado pelo script anterior' : 'Tipo escolhido';
+      const origin = !isNewOnuReplacement(state) && Number(oldFiber?.id_perfil) > 0 ? 'Tipo identificado pelo script anterior' : 'Tipo escolhido';
       await ctx.reply(`${origin}: ${profileModeLabel(resolved.profile)}. Script da OLT: ${resolved.profile.nome}.`);
       await finishProfileChoice(ctx, state, ixc);
       return;
     }
     const menuToken = setMenuChoices(state, resolved.choices, 'profile_choose');
-    await ctx.reply('Sem script anterior no cadastro. A ONU e integrada ou bridge?',
+    await ctx.reply(isNewOnuReplacement(state)
+      ? 'A NOVA ONU e Integrada ou Bridge? Escolha o tipo do NOVO equipamento.'
+      : 'Sem script anterior no cadastro. A ONU e integrada ou bridge?',
       rowsKeyboard('profile', resolved.choices, profileModeLabel, menuToken));
   } catch (error) {
     state.step = 'profile_blocked';

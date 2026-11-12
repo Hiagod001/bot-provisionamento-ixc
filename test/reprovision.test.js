@@ -84,8 +84,8 @@ test('pergunta tipo somente sem perfil antigo, antes de desprovisionar', async (
   } finally { flow.dispose(session); }
 });
 
-test('troca e mudanca aproveitam tipo antigo sem perguntar novamente', async () => {
-  for (const serviceType of ['troca', 'mudanca']) {
+test('mudanca sem troca aproveita tipo antigo sem perguntar novamente', async () => {
+  for (const serviceType of ['mudanca']) {
     const f = fixture(), messages = [];
     const state = { serviceType, oldFiber: f.fiber, login: f.login, contract: f.contract, client: f.client, onu: { id_olt: '8', mac: 'NEW' }, olt: { id: '8' }, matches: [], profileBeforeSwap: serviceType === 'troca' };
     await askProfile({ reply: async text => messages.push(text) }, state, f.ixc);
@@ -93,6 +93,36 @@ test('troca e mudanca aproveitam tipo antigo sem perguntar novamente', async () 
     assert.equal(state.step, serviceType === 'troca' ? 'swap_oldfiber_confirm' : 'confirm');
     assert.equal(messages.some(t => t.includes('A ONU e integrada ou bridge?')), false);
     assert.deepEqual(f.calls, []);
+  }
+});
+
+test('troca de ONU oferece ambos os tipos e preserva escolha diferente do equipamento antigo', async () => {
+  for (const serviceType of ['troca', 'mudanca']) {
+    for (const [oldMode, newProfile] of [['BRIDGE', '94'], ['INTEGRADA', '95']]) {
+      const f = fixture(), messages = [];
+      f.profiles['30'].nome = oldMode;
+      const state = { serviceType, moveSwapOnu: serviceType === 'mudanca', swapEquipment: 'onu',
+        oldFiber: f.fiber, login: f.login, contract: f.contract, client: f.client,
+        onu: { id_olt: '5', mac: 'NEW' }, olt: { id: '5' }, matches: [],
+        profileBeforeSwap: serviceType === 'troca' };
+      const ctx = { reply: async (text, options) => messages.push({ text, options }) };
+      await askProfile(ctx, state, f.ixc);
+      assert.equal(state.step, 'profile_choose');
+      assert.equal(state.profile, undefined);
+      assert.deepEqual(state.matches.map(p => p.id), ['94', '95']);
+      assert.match(messages.at(-1).text, /NOVA ONU/);
+      assert.deepEqual(f.calls, []);
+      // Ao retornar da remocao, manter o tipo escolhido para a ONU nova.
+      state.profile = f.profiles[newProfile];
+      state.previousFiber = state.oldFiber;
+      state.oldFiber = null;
+      state.profileBeforeSwap = false;
+      await askProfile(ctx, state, f.ixc);
+      assert.equal(state.profile.id, newProfile);
+      assert.equal(state.step, 'confirm');
+      assert.equal(messages.some(m => m.text.includes('Tipo identificado pelo script anterior')), false);
+      assert.deepEqual(f.calls, []);
+    }
   }
 });
 
