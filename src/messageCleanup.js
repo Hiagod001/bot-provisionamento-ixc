@@ -1,3 +1,4 @@
+import { logger } from './logger.js';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,7 +22,7 @@ export class MessageHistoryStore {
         this.messages.set(String(chatId), new Set(ids.filter(Number.isInteger)));
       }
     } catch (error) {
-      console.error('Nao consegui ler o historico de mensagens:', error?.message || error);
+      logger.error('Nao consegui ler o historico de mensagens:', error?.message || error);
     }
   }
 

@@ -1,3 +1,4 @@
+import { logger } from './logger.js';
 import { randomUUID, createHmac } from 'node:crypto';
 import { isAllowedProvisionBox, selectProfilesForOlt } from './ixcClient.js';
 import { fileURLToPath } from 'node:url';
@@ -145,7 +146,7 @@ export const answerCallbackQuerySafely = async (answerCbQuery, ...args) => {
     return await answerCbQuery(...args);
   } catch (error) {
     if (isExpiredCallbackQueryError(error)) {
-      console.warn('Callback antigo do Telegram ignorado; o fluxo continuou normalmente.');
+      logger.warn('Callback antigo do Telegram ignorado; o fluxo continuou normalmente.');
       return undefined;
     }
     throw error;
@@ -306,7 +307,7 @@ const askSerial = async (ctx, state) => {
   try {
     await ctx.replyWithPhoto({ source: serialGuideImagePath }, { caption: message });
   } catch (error) {
-    console.error('Nao consegui enviar a imagem de exemplo do serial:', error?.message || error);
+    logger.error('Nao consegui enviar a imagem de exemplo do serial:', error?.message || error);
     await ctx.reply(message);
   }
 };
@@ -560,7 +561,7 @@ const refreshSelectedContract = async (state, ixc) => {
     currentContract = await ixc.read('cliente_contrato', state.contract.id);
   } catch (error) {
     if (isTransientIxcError(error) && normalizeContractStatus(state.contract?.status)) {
-      console.warn(
+      logger.warn(
         `IXC oscilou ao reler o contrato ${state.contract.id}; usando o status obtido na selecao.`
       );
       return;
@@ -582,18 +583,18 @@ const activateContractWithWarning = async (ctx, state, ixc) => {
   await refreshSelectedContract(state, ixc);
 
   if (isContractActive(state.contract)) {
-    console.log(`Contrato ${short(state.contract?.id)} ja estava ativo.`);
+    logger.log(`Contrato ${short(state.contract?.id)} ja estava ativo.`);
     return;
   }
 
   const response = await ixc.activateContract(state.contract.id);
   if (response?.type === 'error') {
     state.contractActivationWarning = response.message;
-    console.error(`Nao foi possivel ativar o contrato ${state.contract.id}: ${response.message}`);
+    logger.error(`Nao foi possivel ativar o contrato ${state.contract.id}: ${response.message}`);
     return;
   }
 
-  console.log(`Contrato ${state.contract.id} ativado pelo bot.`);
+  logger.log(`Contrato ${state.contract.id} ativado pelo bot.`);
 };
 
 export const clearLoginMacWithWarning = async (ctx, state, ixc) => {
@@ -606,12 +607,12 @@ export const clearLoginMacWithWarning = async (ctx, state, ixc) => {
   const response = await ixc.clearLoginMac(state.login.id);
   if (response?.type === 'error') {
     state.macCleanupWarning = response.message;
-    console.error(`Nao foi possivel limpar o MAC do login ${state.login.id}: ${response.message}`);
+    logger.error(`Nao foi possivel limpar o MAC do login ${state.login.id}: ${response.message}`);
     return;
   }
 
   state.loginMacCleared = true;
-  console.log(`MAC do login ${state.login.id} limpo pelo bot.`);
+  logger.log(`MAC do login ${state.login.id} limpo pelo bot.`);
 };
 
 export const completeStandaloneMacClear = async (ctx, state, ixc, config) => {
@@ -637,7 +638,7 @@ export const completeStandaloneMacClear = async (ctx, state, ixc, config) => {
       throw new Error('A limpeza foi solicitada, mas nao foi possivel confirmar o MAC vazio no IXC. Confira o login com o NOC.');
     }
     state.step = 'mac_clear_done';
-    console.log(JSON.stringify({ event: 'standalone_mac_clear', at: new Date().toISOString(), clientId: state.client.id, contractId: contract.id, loginId: login.id }));
+    logger.log(JSON.stringify({ event: 'standalone_mac_clear', at: new Date().toISOString(), clientId: state.client.id, contractId: contract.id, loginId: login.id }));
     await ctx.reply(`MAC limpo e conferido no IXC.\nContrato: ${contract.id}\nEndereco: ${contractAddress(contract, state.client)}\nLogin: ${login.login}`, provisionKeyboard());
     return true;
   } catch (error) {
@@ -660,7 +661,7 @@ const clearTitularityLoginMacsWithWarning = async (ctx, state, ixc) => {
 
   if (!oldLoginId || oldLoginId === '0') {
     state.macCleanupWarning = 'Cadastro de fibra antigo sem ID de login vinculado.';
-    console.error(state.macCleanupWarning);
+    logger.error(state.macCleanupWarning);
   }
 
   for (const loginId of loginIds) {
@@ -668,11 +669,11 @@ const clearTitularityLoginMacsWithWarning = async (ctx, state, ixc) => {
     try {
       const response = await ixc.clearLoginMac(loginId);
       if (response?.type === 'error') throw new Error(response.message);
-      console.log(`MAC do login ${label} ${loginId} limpo pelo bot.`);
+      logger.log(`MAC do login ${label} ${loginId} limpo pelo bot.`);
     } catch (error) {
       const warning = `Login ${loginId}: ${String(error?.message || error)}`;
       state.macCleanupWarning = [state.macCleanupWarning, warning].filter(Boolean).join(' | ');
-      console.error(`Nao foi possivel limpar o MAC do login ${label}: ${warning}`);
+      logger.error(`Nao foi possivel limpar o MAC do login ${label}: ${warning}`);
     }
   }
 };
@@ -828,7 +829,7 @@ const prepareTitularityProfile = async (ctx, state, ixc) => {
 const finishTitularityTransfer = async (ctx, state, ixc, config) => {
   for (const targetFiber of state.targetFibers || []) {
     await ixc.removeAuthorizedOnu(targetFiber.id);
-    console.log(`ONU conflitante ${targetFiber.id} removida do login novo.`);
+    logger.log(`ONU conflitante ${targetFiber.id} removida do login novo.`);
   }
 
   await activateContractWithWarning(ctx, state, ixc);
@@ -866,10 +867,10 @@ const finishTitularityTransfer = async (ctx, state, ixc, config) => {
         serial: updatedFiber.mac,
         address: contractAddress(state.contract, state.client),
       });
-      if (osResult) console.log(`OS ${osResult.serviceOrder.id} finalizada para a fibra ${updatedFiber.id}.`);
+      if (osResult) logger.log(`OS ${osResult.serviceOrder.id} finalizada para a fibra ${updatedFiber.id}.`);
     } catch (error) {
       state.osWarning = String(error?.message || error);
-      console.error('Titularidade concluida, mas a OS falhou:', state.osWarning);
+      logger.error('Titularidade concluida, mas a OS falhou:', state.osWarning);
     }
   }
   if (state.contractActivationWarning) {
@@ -913,7 +914,7 @@ export const sendProvisionSignal = async (ctx, ixc, fiber, confirmedSignal) => {
       signal = await ixc.getOnuPowerSummary(fiber.id);
     }
   } catch (error) {
-    console.error('Sinal apos provisionamento indisponivel:', error?.message || error);
+    logger.error('Sinal apos provisionamento indisponivel:', error?.message || error);
   }
   try {
     await ctx.reply(formatSignalReportEntry({
@@ -922,7 +923,7 @@ export const sendProvisionSignal = async (ctx, ixc, fiber, confirmedSignal) => {
       status: 'Sem leitura no momento. Consulte novamente em Verificar sinal.',
     }));
   } catch (error) {
-    console.error('Nao consegui enviar o sinal ao tecnico:', error?.message || error);
+    logger.error('Nao consegui enviar o sinal ao tecnico:', error?.message || error);
   }
   return signal || null;
 };
@@ -1140,7 +1141,7 @@ export const registerFlow = (bot, ixc, config) => {
       throw error;
     } finally {
       const state = getSession(ctx);
-      console.log(JSON.stringify({
+      logger.log(JSON.stringify({
         event: 'flow_transition', at: new Date().toISOString(),
         session: createHmac('sha256', auditSalt).update(String(sessionKey(ctx))).digest('hex').slice(0, 16),
         from: before, to: state.step, service: state.serviceType,
@@ -1553,7 +1554,7 @@ export const registerFlow = (bot, ixc, config) => {
     await ctx.answerCbQuery('Removendo cadastro antigo');
     await ctx.reply('Removendo o cadastro antigo da ONU. Aguarde a confirmacao antes de tentar novamente.');
     await ixc.removeAuthorizedOnu(state.oldFiber.id);
-    console.log(`Cadastro de fibra antigo ${state.oldFiber.id} removido na mudanca de endereco.`);
+    logger.log(`Cadastro de fibra antigo ${state.oldFiber.id} removido na mudanca de endereco.`);
 
     const pending = await ixc.findPendingOnusBySerialSuffix(state.serialSuffix);
 
@@ -1597,7 +1598,7 @@ export const registerFlow = (bot, ixc, config) => {
       await ctx.reply('A caixa antiga nao pode ser reutilizada nesta OLT ou esta fora dos projetos permitidos. A troca foi interrompida sem remover a ONU. Acione o NOC; nao e necessario escolher outra caixa nesta troca.');
       return;
     }
-    console.log(JSON.stringify({ event: 'swap_preserve_box', at: new Date().toISOString(), contractId: state.contract.id, fiberId: oldFiber.id, boxId: box.id, port: sgaBox ? '0' : oldFiber.porta_ftth }));
+    logger.log(JSON.stringify({ event: 'swap_preserve_box', at: new Date().toISOString(), contractId: state.contract.id, fiberId: oldFiber.id, boxId: box.id, port: sgaBox ? '0' : oldFiber.porta_ftth }));
     // Revalidar o perfil antes de remover: pode ter sido editado por outro operador.
     try {
       const resolved = await resolveProvisionProfiles(ixc, { oltId: state.onu?.id_olt || state.olt?.id, oldFiber: isNewOnuReplacement(state) ? undefined : oldFiber, mode: profileMode(state.profile) });
@@ -1628,7 +1629,7 @@ export const registerFlow = (bot, ixc, config) => {
     state.dropPort = String(oldFiber.porta_ftth || '');
     state.oldFiber = null;
 
-    console.log(`Equipamento antigo ${oldFiber.id} removido na troca de equipamento.`);
+    logger.log(`Equipamento antigo ${oldFiber.id} removido na troca de equipamento.`);
     await clearLoginMacWithWarning(ctx, state, ixc);
     await askProfile(ctx, state, ixc);
   });
@@ -1667,7 +1668,7 @@ export const registerFlow = (bot, ixc, config) => {
       await finishTitularityTransfer(ctx, state, ixc, config);
     } catch (error) {
       state.step = 'titularity_failed';
-      console.error('Troca de titularidade nao concluida:', error?.code || '', error?.message || error);
+      logger.error('Troca de titularidade nao concluida:', error?.code || '', error?.message || error);
       await ctx.reply('Nao consegui confirmar a troca de titularidade. Algumas etapas podem ter sido gravadas no IXC. Acione o NOC para conferir antes de tentar novamente.');
     }
   });
@@ -1814,9 +1815,9 @@ export const registerFlow = (bot, ixc, config) => {
             address: contractAddress(state.contract, state.client),
             serviceDescription: state.serviceType === 'mudanca' ? (state.moveSwapOnu ? 'Mudanca de endereco com troca de ONU' : 'Mudanca de endereco') : undefined,
           });
-          if (osResult) console.log(`OS ${osResult.serviceOrder.id} finalizada para a fibra ${result.provisionedOnu?.id}.`);
+          if (osResult) logger.log(`OS ${osResult.serviceOrder.id} finalizada para a fibra ${result.provisionedOnu?.id}.`);
         } catch (osError) {
-          console.error(
+          logger.error(
             'ONU provisionada, mas a OS nao foi concluida:',
             osError?.code || '',
             osError?.message || osError
@@ -1836,12 +1837,12 @@ export const registerFlow = (bot, ixc, config) => {
         provisionedSignalKeyboard()
       );
     } catch (error) {
-      console.error(
+      logger.error(
         'Provisionamento nao concluido:',
         error?.code || '',
         error?.message || error
       );
-      console.log(JSON.stringify({ event: 'flow_operation_error', at: new Date().toISOString(), step: state.step, service: state.serviceType, errorCode: classifyFlowError(error) }));
+      logger.log(JSON.stringify({ event: 'flow_operation_error', at: new Date().toISOString(), step: state.step, service: state.serviceType, errorCode: classifyFlowError(error) }));
       if (await reportUncertainProvision(ctx, state, error)) return;
       state.step = 'retry';
       const reason = String(error?.message || 'Falha ao consultar o IXC.')

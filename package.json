@@ -8,8 +8,8 @@
     "start": "node src/index.js",
     "web": "node src/web.js",
     "dev": "nodemon src/index.js",
-    "check": "node --check src/index.js && node --check src/ixcClient.js && node --check src/flow.js && node --check src/config.js && node --check src/web.js && node --check src/webFlow.js && node --check src/webServer.js && node --check web/app.js",
-    "test": "node --test test/ixcClient.test.js test/messageCleanup.test.js test/web.test.js test/contractAddress.test.js test/reprovision.test.js test/oltResponseAudit.test.js test/provisionTimeout.test.js"
+    "check": "node --check src/logger.js && node --check src/index.js && node --check src/ixcClient.js && node --check src/flow.js && node --check src/config.js && node --check src/web.js && node --check src/webFlow.js && node --check src/webServer.js && node --check web/app.js",
+    "test": "node --test test/logger.test.js test/ixcClient.test.js test/messageCleanup.test.js test/web.test.js test/contractAddress.test.js test/reprovision.test.js test/oltResponseAudit.test.js test/provisionTimeout.test.js"
   },
   "dependencies": {
     "axios": "^1.7.9",

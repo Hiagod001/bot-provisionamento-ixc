@@ -1,3 +1,4 @@
+import { logger } from './logger.js';
 import { resolveProvisionProfiles } from './provisionProfiles.js';
 import { saveOltResponse } from './oltResponseAudit.js';
 const busy = new Set();
@@ -37,9 +38,9 @@ export async function runReprovisionOltAction(request, { fiberId, phase }, saveR
   };
   let reference;
   try { reference = await saveResponse(diagnostic); } catch {
-    console.error(JSON.stringify({ event: 'olt_response_capture_failed', fiberId, phase }));
+    logger.error(JSON.stringify({ event: 'olt_response_capture_failed', fiberId, phase }));
   }
-  console.error(JSON.stringify({ event: 'olt_action_unconfirmed', fiberId, phase, classification, reference, httpStatus: diagnostic.httpStatus, errorCode: diagnostic.errorCode }));
+  logger.error(JSON.stringify({ event: 'olt_action_unconfirmed', fiberId, phase, classification, reference, httpStatus: diagnostic.httpStatus, errorCode: diagnostic.errorCode }));
   const action = phase === 'deauthorize' ? 'desprovisao' : 'regravacao';
   const detail = classification === 'transport_error' ? 'A consulta terminou sem resposta do IXC.'
     : classification === 'ixc_rejected' ? 'O IXC retornou uma indicacao de erro.'
@@ -78,7 +79,7 @@ export async function reprovisionExisting(ixc, { client, contract, login, fiber,
     phase = 'wait_after_deauthorize';
     // Falha ao avisar o operador nao deve impedir a recuperacao da ONU.
     try { await onWaiting(); } catch {
-      console.warn(JSON.stringify({ event: 'reprovision_wait_notice_failed', fiberId: key }));
+      logger.warn(JSON.stringify({ event: 'reprovision_wait_notice_failed', fiberId: key }));
     }
     await wait(REPROVISION_SETTLE_MS);
     phase = 'update_profile';
@@ -98,7 +99,7 @@ export async function reprovisionExisting(ixc, { client, contract, login, fiber,
     return { fiber: confirmed };
   } catch (error) {
     // Nao registrar resposta bruta: o console da OLT pode conter senhas PPPoE.
-    console.error(JSON.stringify({ event: 'reprovision_failed', fiberId: key, phase, code: error.code || 'operation_failed' }));
+    logger.error(JSON.stringify({ event: 'reprovision_failed', fiberId: key, phase, code: error.code || 'operation_failed' }));
     throw error;
   } finally { busy.delete(key); }
 }

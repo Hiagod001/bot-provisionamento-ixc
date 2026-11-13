@@ -1,3 +1,4 @@
+import { logger } from './logger.js';
 import axios from 'axios';
 import https from 'node:https';
 import { saveOltResponse } from './oltResponseAudit.js';
@@ -464,7 +465,7 @@ export class IxcClient {
     } catch (error) {
       const transientCodes = ['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN'];
       if (!retryTransient || !transientCodes.includes(error?.code)) throw error;
-      console.warn(`IXC oscilou ao consultar ${table}; repetindo a leitura uma vez.`);
+      logger.warn(`IXC oscilou ao consultar ${table}; repetindo a leitura uma vez.`);
       response = await request();
     }
     if (strictResponse) {
@@ -535,7 +536,7 @@ export class IxcClient {
     const rows = scoped ? await this.listPendingOnusForOlt(oltId) : await this.listPendingOnus();
     const matches = this.filterPendingOnusBySerialSuffix(rows, suffix)
       .filter(onu => !scoped || String(onu.id_olt) === String(oltId));
-    console.info(JSON.stringify({ event: 'onu_search', at: new Date().toISOString(), olt: scoped ? String(oltId) : undefined, suffix: suffix.slice(-4), matches: matches.length, rows: rows.length, failedOlts: rows.failedOlts || [] }));
+    logger.info(JSON.stringify({ event: 'onu_search', at: new Date().toISOString(), olt: scoped ? String(oltId) : undefined, suffix: suffix.slice(-4), matches: matches.length, rows: rows.length, failedOlts: rows.failedOlts || [] }));
     if (!matches.length && rows.failedOlts?.length) {
       throw new Error('A consulta de algumas OLTs nao terminou. Nao foi possivel confirmar esse serial. Aguarde e tente novamente.');
     }
@@ -565,10 +566,10 @@ export class IxcClient {
           page: 1, rp: 10000, sortname: '', sortorder: 'asc', query: '', qtype: '', oper: 'L',
           grid_param: JSON.stringify([{ TB: 'id_olt', OP: '=', P: id }]), grid_param2: false,
         }, { timeoutMs: Math.min(30000, remaining), retryTransient: false, strictResponse: true });
-        console.info(JSON.stringify({ event: 'onu_target_refresh', at: new Date().toISOString(), olt: id, attempt, rows: rows.length, durationMs: Date.now() - started }));
+        logger.info(JSON.stringify({ event: 'onu_target_refresh', at: new Date().toISOString(), olt: id, attempt, rows: rows.length, durationMs: Date.now() - started }));
         return rows;
       } catch (error) {
-        console.warn(JSON.stringify({ event: 'onu_target_failed', at: new Date().toISOString(), olt: id, attempt, code: error?.code || 'IXC_RESPONSE_ERROR', durationMs: Date.now() - started }));
+        logger.warn(JSON.stringify({ event: 'onu_target_failed', at: new Date().toISOString(), olt: id, attempt, code: error?.code || 'IXC_RESPONSE_ERROR', durationMs: Date.now() - started }));
         if (!['ECONNABORTED', 'ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN'].includes(error?.code)) {
           throw new Error('O IXC nao confirmou a consulta da OLT de destino. Acione o NOC para conferir a resposta e as permissoes. Nada foi removido.');
         }
@@ -602,7 +603,7 @@ export class IxcClient {
       if (!ids.length) throw new Error('Lista de OLTs vazia');
     } catch (error) {
       ids = this.pendingOltIds || [];
-      console.warn(JSON.stringify({ event: 'onu_discovery_fallback', at: new Date().toISOString(), configuredOlts: ids.length }));
+      logger.warn(JSON.stringify({ event: 'onu_discovery_fallback', at: new Date().toISOString(), configuredOlts: ids.length }));
       if (!ids.length) throw new Error('Nao foi possivel listar as OLTs. O NOC precisa configurar a lista de OLTs para consulta no bot.');
     }
     ids = [...new Set(ids)].filter((id) => /^[1-9]\d*$/.test(id));
@@ -622,12 +623,12 @@ export class IxcClient {
           rows.push(...result);
         } catch (error) {
           failedOlts.push(id);
-          console.warn(JSON.stringify({ event: 'onu_olt_failed', at: new Date().toISOString(), olt: id, code: error?.code || 'IXC_RESPONSE_ERROR' }));
+          logger.warn(JSON.stringify({ event: 'onu_olt_failed', at: new Date().toISOString(), olt: id, code: error?.code || 'IXC_RESPONSE_ERROR' }));
         }
       }
     };
     await Promise.all(Array.from({ length: Math.min(3, ids.length) }, worker));
-    console.info(JSON.stringify({ event: 'onu_refresh', at: new Date().toISOString(), olts: ids.length, failedOlts, rows: rows.length, durationMs: Date.now() - started }));
+    logger.info(JSON.stringify({ event: 'onu_refresh', at: new Date().toISOString(), olts: ids.length, failedOlts, rows: rows.length, durationMs: Date.now() - started }));
     Object.defineProperty(rows, 'failedOlts', { value: failedOlts });
     return rows;
   }
@@ -702,7 +703,7 @@ export class IxcClient {
       assertNotIxcError(deviceResponse, 'desautorizar cadastro duplicado da ONU');
     } catch (error) {
       if (!isMissingOnuDeviceResponse(deviceResponse)) throw error;
-      console.warn(`ONU do cadastro antigo ${onuId} ja nao existe na OLT; removendo cadastro orfao.`);
+      logger.warn(`ONU do cadastro antigo ${onuId} ja nao existe na OLT; removendo cadastro orfao.`);
     }
 
     const deleteResponse = await this.delete('radpop_radio_cliente_fibra', onuId);
@@ -1365,10 +1366,10 @@ export class IxcClient {
     const step = async (name, operation, mutates = false) => {
       phase = name;
       if (mutates) mutationStarted = true;
-      console.info(JSON.stringify({ event: 'provision_stage', at: new Date().toISOString(), phase, fiberId: provisionedOnu?.id, loginId: payload.clienteFibra?.id_login, olt: payload.clienteFibra?.id_transmissor }));
+      logger.info(JSON.stringify({ event: 'provision_stage', at: new Date().toISOString(), phase, fiberId: provisionedOnu?.id, loginId: payload.clienteFibra?.id_login, olt: payload.clienteFibra?.id_transmissor }));
       if (name === 'authorize_pending' || name === 'authorize_device') {
         try { await onProgress(name); } catch {
-          console.warn(JSON.stringify({ event: 'provision_notice_failed', phase }));
+          logger.warn(JSON.stringify({ event: 'provision_notice_failed', phase }));
         }
       }
       return operation();
@@ -1387,7 +1388,7 @@ export class IxcClient {
         ).values(),
       ];
       for (const duplicate of duplicates) {
-        console.log(
+        logger.log(
           `Removendo cadastro de fibra antigo ${duplicate.id} antes do novo provisionamento.`
         );
         await step('remove_duplicate', () => this.removeDuplicateFiberClient(duplicate.id), true);
@@ -1453,8 +1454,8 @@ export class IxcClient {
           response: error?.ixcResponse ?? error?.response?.data,
           httpStatus: Number.isInteger(error?.response?.status) ? error.response.status : undefined,
           errorCode: /^[A-Z_]{1,40}$/.test(error?.code || '') ? error.code : undefined });
-      } catch { console.warn(JSON.stringify({ event: 'provision_capture_failed', phase })); }
-      console.error(JSON.stringify({ event: 'provision_unconfirmed', at: new Date().toISOString(), phase, fiberId: observed?.id || provisionedOnu?.id, reference, timeout }));
+      } catch { logger.warn(JSON.stringify({ event: 'provision_capture_failed', phase })); }
+      logger.error(JSON.stringify({ event: 'provision_unconfirmed', at: new Date().toISOString(), phase, fiberId: observed?.id || provisionedOnu?.id, reference, timeout }));
       const message = timeout
         ? 'O IXC demorou para responder e pode continuar executando a operacao.'
         : 'Nao foi possivel confirmar a conclusao no IXC apos iniciar as alteracoes.';

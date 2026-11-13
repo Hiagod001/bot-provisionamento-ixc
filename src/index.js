@@ -1,9 +1,11 @@
+import { logger, setLogChannel } from './logger.js';
 import dns from 'node:dns';
 import { Telegraf } from 'telegraf';
 import { config } from './config.js';
 import { IxcClient } from './ixcClient.js';
 import { registerFlow } from './flow.js';
 
+setLogChannel('TELEGRAM');
 dns.setDefaultResultOrder('ipv4first');
 
 // O fluxo inclui duas autorizacoes de ate 3 minutos e conferencias no IXC.
@@ -14,7 +16,7 @@ const ixc = new IxcClient(config.ixc);
 registerFlow(bot, ixc, config);
 
 bot.catch(async (error, ctx) => {
-  console.error('Erro no bot:', error?.code || '', error?.message || error);
+  logger.error('Erro no bot:', error?.code || '', error?.message || error);
   const reason = String(error?.message || '')
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
@@ -31,11 +33,11 @@ const launchWithRetry = async () => {
   while (true) {
     try {
       bot.botInfo = await bot.telegram.getMe();
-      console.log(`Bot de provisionamento iniciado. DRY_RUN=${config.dryRun ? 'true' : 'false'}`);
+      logger.log(`Bot de provisionamento iniciado. DRY_RUN=${config.dryRun ? 'true' : 'false'}`);
       await bot.launch({ dropPendingUpdates: true });
       return;
     } catch (error) {
-      console.error(`Telegram indisponivel ao iniciar: ${error?.code || error?.message || error}`);
+      logger.error(`Telegram indisponivel ao iniciar: ${error?.code || error?.message || error}`);
       await new Promise((resolve) => setTimeout(resolve, 10000));
     }
   }

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { logger } from './logger.js';
 import { registerFlow, releaseFlowSession } from './flow.js';
 
 // Adapter: the web channel executes the same business flow as Telegram.
@@ -46,7 +47,10 @@ export function createWebFlow(ixc, config) {
       let index = -1;
       const next = async () => { index++; return index < middleware.length ? middleware[index](ctx, next) : route?.fn(ctx); };
       try { await next(); }
-      catch { await reply('Nao foi possivel concluir esta etapa. Confira o estado no IXC antes de repetir uma operacao. Use /cancelar para voltar.'); }
+      catch (error) {
+        logger.error({ event: 'web_flow_error', errorCode: error?.code || 'operation_failed', errorType: error?.name || 'Error' });
+        await reply('Nao foi possivel concluir esta etapa. Confira o estado no IXC antes de repetir uma operacao. Use /cancelar para voltar.');
+      }
     },
   };
 }
